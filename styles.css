@@ -688,6 +688,32 @@ button {
   margin-top: 2px;
 }
 
+/* Custom Supplier Section */
+.custom-supplier-section {
+  margin-top: var(--spacing-lg);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--border-color);
+}
+
+.section-divider {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: var(--spacing-md);
+}
+
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.custom-supplier-section .primary-btn {
+  margin-top: var(--spacing-sm);
+}
+
 /* Usage Section */
 .usage-section {
   margin-top: var(--spacing-lg);

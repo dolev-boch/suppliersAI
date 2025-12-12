@@ -70,6 +70,9 @@ class InvoiceScanner {
       modalClose: document.getElementById('modalClose'),
       supplierSearch: document.getElementById('supplierSearch'),
       supplierList: document.getElementById('supplierList'),
+      customSupplierSection: document.getElementById('customSupplierSection'),
+      customSupplierName: document.getElementById('customSupplierName'),
+      saveCustomSupplier: document.getElementById('saveCustomSupplier'),
 
       // Usage statistics
       usageSection: document.getElementById('usageSection'),
@@ -162,6 +165,17 @@ class InvoiceScanner {
     // Supplier search
     this.elements.supplierSearch.addEventListener('input', (e) => {
       this.filterSuppliers(e.target.value);
+    });
+
+    // Custom supplier (שונות)
+    this.elements.saveCustomSupplier.addEventListener('click', () => {
+      this.saveCustomSupplier();
+    });
+
+    this.elements.customSupplierName.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        this.saveCustomSupplier();
+      }
     });
   }
 
@@ -336,8 +350,12 @@ class InvoiceScanner {
       : 'לא זוהה';
     this.setConfidenceBadge(this.elements.amountConfidence, result.total_confidence);
 
-    // Credit card (optional)
-    if (result.credit_card_last4) {
+    // Credit card (only for special categories: fuel_station, supermarket, nursery, other)
+    const showCreditCard =
+      result.credit_card_last4 &&
+      ['fuel_station', 'supermarket', 'nursery', 'other'].includes(result.supplier_category);
+
+    if (showCreditCard) {
       this.elements.creditCardValue.textContent = `****${result.credit_card_last4}`;
       this.setConfidenceBadge(
         this.elements.creditCardConfidence,
@@ -537,6 +555,8 @@ class InvoiceScanner {
   openSupplierModal() {
     this.elements.supplierModal.style.display = 'flex';
     this.elements.supplierSearch.value = '';
+    this.elements.customSupplierName.value = '';
+    this.elements.customSupplierSection.style.display = 'block';
     this.populateSupplierList();
     this.elements.supplierSearch.focus();
   }
@@ -632,6 +652,31 @@ class InvoiceScanner {
       this.elements.supplierCategory.textContent = 'קטגוריה: רשתות מזון';
       this.elements.supplierCategory.style.display = 'block';
     }
+
+    this.closeSupplierModal();
+  }
+
+  /**
+   * Save custom supplier as "שונות" (other)
+   */
+  saveCustomSupplier() {
+    const supplierName = this.elements.customSupplierName.value.trim();
+
+    if (!supplierName) {
+      alert('נא להזין שם ספק');
+      return;
+    }
+
+    console.log(`Saving custom supplier: ${supplierName} as "other"`);
+
+    // Set as "other" category
+    this.editedData.supplier_name = supplierName;
+    this.editedData.supplier_category = 'other';
+
+    // Update display
+    this.elements.supplierValue.textContent = supplierName;
+    this.elements.supplierCategory.textContent = 'קטגוריה: שונות';
+    this.elements.supplierCategory.style.display = 'block';
 
     this.closeSupplierModal();
   }
@@ -776,7 +821,9 @@ class InvoiceScanner {
     }
 
     try {
+      // Show loading state
       this.elements.approveAndSendBtn.disabled = true;
+      this.elements.approveAndSendBtn.textContent = 'שולח...';
       this.showStatus('שולח נתונים ל-Google Sheets...', 'info');
 
       // Merge original data with edited data
@@ -821,7 +868,9 @@ class InvoiceScanner {
       console.error('Sheets error:', error);
       this.showStatus('שגיאה בשליחת הנתונים', 'error');
     } finally {
+      // Restore button state
       this.elements.approveAndSendBtn.disabled = false;
+      this.elements.approveAndSendBtn.textContent = this.editMode ? 'שמור ושלח' : 'אישור ושליחה';
     }
   }
 }
