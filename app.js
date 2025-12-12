@@ -413,46 +413,27 @@ class InvoiceScanner {
       this.elements.sendToSheetsBtn.disabled = true;
       this.showStatus('שולח נתונים ל-Google Sheets...', 'info');
 
-      // Get current timestamp in IL timezone
-      const now = new Date();
-      const ilTimestamp = new Intl.DateTimeFormat('he-IL', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        timeZone: 'Asia/Jerusalem',
-      }).format(now);
-
-      // Prepare data for Google Sheets
+      // Prepare data for Google Sheets - send in correct format
       const dataToSend = {
-        // Timestamp when sent
-        timestamp: ilTimestamp,
-
-        // Supplier information
-        supplier_category: GeminiService.getCategoryName(this.currentResult.supplier_category),
+        // Supplier information - send category KEY not Hebrew name
+        supplier_category: this.currentResult.supplier_category, // e.g., "priority", "fuel_station"
         supplier_name: this.currentResult.supplier_name || '',
 
-        // Document information
+        // Document information - send type KEY not Hebrew text
         document_number: this.currentResult.document_number || '',
-        document_type:
-          this.currentResult.document_type === 'invoice' ? 'חשבונית מס' : 'תעודת משלוח',
+        document_type: this.currentResult.document_type, // e.g., "invoice", "delivery_note"
 
         // Date - already in DD/MM/YYYY format from Gemini
         document_date: this.currentResult.document_date || '',
 
-        // Amount
+        // Amount - send as string
         total_amount: this.currentResult.total_amount || '',
 
         // Credit card (optional)
         credit_card_last4: this.currentResult.credit_card_last4 || '',
 
-        // Confidence scores
-        supplier_confidence: this.currentResult.supplier_confidence || 0,
-        document_confidence: this.currentResult.document_number_confidence || 0,
-        date_confidence: this.currentResult.date_confidence || 0,
-        amount_confidence: this.currentResult.total_confidence || 0,
+        // Optional notes
+        notes: this.currentResult.notes || '',
       };
 
       console.log('Sending to Google Sheets:', dataToSend);
