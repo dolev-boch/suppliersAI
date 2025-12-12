@@ -1,10 +1,14 @@
-// Main Application Logic
+// Zuza Patisserie Invoice Scanner - Main Application
+
 class InvoiceScanner {
   constructor() {
     this.selectedFile = null;
     this.imageBase64 = null;
     this.currentResult = null;
+    this.editMode = false;
+    this.editedData = {};
     this.dailyTokenCount = this.loadDailyTokenCount();
+    this.loadingStartTime = null;
 
     this.initializeElements();
     this.attachEventListeners();
@@ -26,28 +30,46 @@ class InvoiceScanner {
 
       // Loading and status
       loadingState: document.getElementById('loadingState'),
+      loadingProgress: document.getElementById('loadingProgress'),
       statusMessage: document.getElementById('statusMessage'),
 
       // Results section
       resultsSection: document.getElementById('resultsSection'),
+      actionButtons: document.getElementById('actionButtons'),
+      editBtn: document.getElementById('editBtn'),
+      approveAndSendBtn: document.getElementById('approveAndSendBtn'),
+
+      // Result fields
+      supplierCard: document.getElementById('supplierCard'),
       supplierValue: document.getElementById('supplierValue'),
       supplierCategory: document.getElementById('supplierCategory'),
       supplierNote: document.getElementById('supplierNote'),
       supplierConfidence: document.getElementById('supplierConfidence'),
+
+      documentNumberCard: document.getElementById('documentNumberCard'),
       documentNumber: document.getElementById('documentNumber'),
       documentType: document.getElementById('documentType'),
       documentConfidence: document.getElementById('documentConfidence'),
+
+      dateCard: document.getElementById('dateCard'),
       dateValue: document.getElementById('dateValue'),
       dateConfidence: document.getElementById('dateConfidence'),
+
+      amountCard: document.getElementById('amountCard'),
       amountValue: document.getElementById('amountValue'),
       amountConfidence: document.getElementById('amountConfidence'),
+
       creditCardCard: document.getElementById('creditCardCard'),
       creditCardValue: document.getElementById('creditCardValue'),
       creditCardConfidence: document.getElementById('creditCardConfidence'),
 
-      // Action buttons
       newScanBtn: document.getElementById('newScanBtn'),
-      sendToSheetsBtn: document.getElementById('sendToSheetsBtn'),
+
+      // Supplier modal
+      supplierModal: document.getElementById('supplierModal'),
+      modalClose: document.getElementById('modalClose'),
+      supplierSearch: document.getElementById('supplierSearch'),
+      supplierList: document.getElementById('supplierList'),
 
       // Usage statistics
       usageSection: document.getElementById('usageSection'),
@@ -79,7 +101,7 @@ class InvoiceScanner {
     // Drag and drop
     this.elements.uploadZone.addEventListener('dragover', (e) => {
       e.preventDefault();
-      this.elements.uploadZone.style.borderColor = 'var(--primary-color)';
+      this.elements.uploadZone.style.borderColor = 'var(--gold)';
     });
 
     this.elements.uploadZone.addEventListener('dragleave', () => {
@@ -108,14 +130,34 @@ class InvoiceScanner {
       this.elements.fileInput.click();
     });
 
+    // Action buttons
+    this.elements.editBtn.addEventListener('click', () => {
+      this.enterEditMode();
+    });
+
+    this.elements.approveAndSendBtn.addEventListener('click', () => {
+      this.sendToGoogleSheets();
+    });
+
     // New scan button
     this.elements.newScanBtn.addEventListener('click', () => {
       this.resetForNewScan();
     });
 
-    // Send to sheets button
-    this.elements.sendToSheetsBtn.addEventListener('click', () => {
-      this.sendToGoogleSheets();
+    // Modal controls
+    this.elements.modalClose.addEventListener('click', () => {
+      this.closeSupplierModal();
+    });
+
+    this.elements.supplierModal.addEventListener('click', (e) => {
+      if (e.target === this.elements.supplierModal) {
+        this.closeSupplierModal();
+      }
+    });
+
+    // Supplier search
+    this.elements.supplierSearch.addEventListener('input', (e) => {
+      this.filterSuppliers(e.target.value);
     });
   }
 
@@ -164,7 +206,7 @@ class InvoiceScanner {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       if (!CONFIG.GEMINI_API_KEY) {
-        this.showStatus('⌛ שגיאה בטעינת הגדרות. נא לרענן את הדף.', 'error');
+        this.showStatus('שגיאה בטעינת הגדרות. נא לרענן את הדף.', 'error');
         return;
       }
     }
@@ -176,21 +218,29 @@ class InvoiceScanner {
       this.elements.statusMessage.style.display = 'none';
       this.elements.resultsSection.style.display = 'none';
 
+      // Start timer and progress updates
+      this.loadingStartTime = Date.now();
+      this.startLoadingProgress();
+
       // Analyze with Gemini
       const result = await GeminiService.analyzeInvoice(this.imageBase64);
       this.currentResult = result;
+      this.editedData = {}; // Reset edited data
 
       console.log('Analysis result:', result);
+
+      // Stop progress updates
+      this.stopLoadingProgress();
 
       // Check average confidence
       const avgConfidence = GeminiService.calculateAverageConfidence(result);
 
       if (avgConfidence < CONFIG.CONFIDENCE_THRESHOLDS.LOW) {
-        this.showStatus('⚠️ איכות התמונה אינה מספקת. נא לצלם שוב בתאורה טובה יותר', 'warning');
+        this.showStatus('איכות התמונה אינה מספקת. נא לצלם שוב בתאורה טובה יותר', 'warning');
       } else if (avgConfidence < CONFIG.CONFIDENCE_THRESHOLDS.MEDIUM) {
-        this.showStatus('✅ החשבונית נותחה. חלק מהנתונים עשויים להיות לא מדויקים', 'info');
+        this.showStatus('החשבונית נותחה. חלק מהנתונים עשויים להיות לא מדויקים', 'info');
       } else {
-        this.showStatus('✅ החשבונית נותחה בהצלחה!', 'success');
+        this.showStatus('החשבונית נותחה בהצלחה!', 'success');
       }
 
       // Display results
@@ -202,11 +252,37 @@ class InvoiceScanner {
       }
     } catch (error) {
       console.error('Processing error:', error);
+      this.stopLoadingProgress();
       this.handleError(error);
     } finally {
       this.elements.processBtn.disabled = false;
       this.elements.loadingState.style.display = 'none';
     }
+  }
+
+  /**
+   * Start loading progress updates
+   */
+  startLoadingProgress() {
+    this.loadingInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - this.loadingStartTime) / 1000);
+      if (elapsed < 30) {
+        this.elements.loadingProgress.textContent = `עברו ${elapsed} שניות...`;
+      } else {
+        this.elements.loadingProgress.textContent = 'זה לוקח יותר זמן מהרגיל...';
+      }
+    }, 1000);
+  }
+
+  /**
+   * Stop loading progress updates
+   */
+  stopLoadingProgress() {
+    if (this.loadingInterval) {
+      clearInterval(this.loadingInterval);
+      this.loadingInterval = null;
+    }
+    this.elements.loadingProgress.textContent = '';
   }
 
   /**
@@ -241,7 +317,7 @@ class InvoiceScanner {
 
     // Document type
     const isInvoice = result.document_type === 'invoice';
-    this.elements.documentType.textContent = isInvoice ? '✓ חשבונית מס' : '⚠️ תעודת משלוח';
+    this.elements.documentType.textContent = isInvoice ? 'חשבונית מס' : 'תעודת משלוח';
     this.elements.documentType.className = `document-type-badge ${
       isInvoice ? 'invoice' : 'delivery'
     }`;
@@ -268,11 +344,284 @@ class InvoiceScanner {
       this.elements.creditCardCard.style.display = 'none';
     }
 
+    // Reset edit mode
+    this.exitEditMode();
+
     // Show results section
     this.elements.resultsSection.style.display = 'block';
 
     // Scroll to results
     this.elements.resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /**
+   * Enter edit mode
+   */
+  enterEditMode() {
+    this.editMode = true;
+    this.elements.editBtn.textContent = 'בטל עריכה';
+    this.elements.approveAndSendBtn.textContent = 'שמור ושלח';
+
+    // Make cards editable
+    const editableCards = [
+      { card: this.elements.supplierCard, field: 'supplier', isSupplier: true },
+      { card: this.elements.documentNumberCard, field: 'document_number' },
+      { card: this.elements.dateCard, field: 'date' },
+      { card: this.elements.amountCard, field: 'amount' },
+    ];
+
+    if (this.elements.creditCardCard.style.display !== 'none') {
+      editableCards.push({ card: this.elements.creditCardCard, field: 'credit_card' });
+    }
+
+    editableCards.forEach(({ card, field, isSupplier }) => {
+      card.classList.add('editable');
+      card.style.cursor = 'pointer';
+
+      const clickHandler = () => {
+        if (isSupplier) {
+          this.openSupplierModal();
+        } else {
+          this.editField(field);
+        }
+      };
+
+      // Remove old listener if exists
+      const oldHandler = card._clickHandler;
+      if (oldHandler) {
+        card.removeEventListener('click', oldHandler);
+      }
+
+      card._clickHandler = clickHandler;
+      card.addEventListener('click', clickHandler);
+    });
+
+    // Update button handler
+    this.elements.editBtn.onclick = () => this.exitEditMode();
+  }
+
+  /**
+   * Exit edit mode
+   */
+  exitEditMode() {
+    this.editMode = false;
+    this.elements.editBtn.textContent = 'עריכה';
+    this.elements.approveAndSendBtn.textContent = 'אישור ושליחה';
+
+    // Remove editable state
+    const cards = document.querySelectorAll('.result-card');
+    cards.forEach((card) => {
+      card.classList.remove('editable');
+      card.style.cursor = '';
+      if (card._clickHandler) {
+        card.removeEventListener('click', card._clickHandler);
+        card._clickHandler = null;
+      }
+    });
+
+    // Restore button handler
+    this.elements.editBtn.onclick = () => this.enterEditMode();
+  }
+
+  /**
+   * Edit a field (document number, date, amount)
+   */
+  editField(field) {
+    let valueElement, originalValue;
+
+    switch (field) {
+      case 'document_number':
+        valueElement = this.elements.documentNumber;
+        originalValue = this.editedData.document_number || this.currentResult.document_number || '';
+        break;
+      case 'date':
+        valueElement = this.elements.dateValue;
+        originalValue = this.editedData.document_date || this.currentResult.document_date || '';
+        break;
+      case 'amount':
+        valueElement = this.elements.amountValue;
+        originalValue =
+          this.editedData.total_amount ||
+          this.currentResult.total_amount ||
+          '';
+        // Remove ₪ symbol if present
+        originalValue = originalValue.toString().replace('₪', '');
+        break;
+      case 'credit_card':
+        valueElement = this.elements.creditCardValue;
+        originalValue =
+          this.editedData.credit_card_last4 || this.currentResult.credit_card_last4 || '';
+        // Remove **** if present
+        originalValue = originalValue.toString().replace(/\*/g, '');
+        break;
+    }
+
+    // Create input field
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'edit-field';
+    input.value = originalValue;
+
+    // Handle date field
+    if (field === 'date') {
+      input.placeholder = 'DD/MM/YYYY';
+    }
+
+    // Replace value with input
+    const parent = valueElement.parentNode;
+    parent.replaceChild(input, valueElement);
+    input.focus();
+    input.select();
+
+    // Handle save
+    const saveEdit = () => {
+      const newValue = input.value.trim();
+      if (newValue) {
+        // Save to edited data
+        switch (field) {
+          case 'document_number':
+            this.editedData.document_number = newValue;
+            break;
+          case 'date':
+            this.editedData.document_date = newValue;
+            break;
+          case 'amount':
+            this.editedData.total_amount = newValue;
+            break;
+          case 'credit_card':
+            this.editedData.credit_card_last4 = newValue;
+            break;
+        }
+
+        // Update display
+        switch (field) {
+          case 'amount':
+            valueElement.textContent = `₪${newValue}`;
+            break;
+          case 'credit_card':
+            valueElement.textContent = `****${newValue}`;
+            break;
+          default:
+            valueElement.textContent = newValue;
+        }
+      }
+
+      // Restore original element
+      parent.replaceChild(valueElement, input);
+    };
+
+    // Save on blur or Enter
+    input.addEventListener('blur', saveEdit);
+    input.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        saveEdit();
+      }
+    });
+  }
+
+  /**
+   * Open supplier search modal
+   */
+  openSupplierModal() {
+    this.elements.supplierModal.style.display = 'flex';
+    this.elements.supplierSearch.value = '';
+    this.populateSupplierList();
+    this.elements.supplierSearch.focus();
+  }
+
+  /**
+   * Close supplier search modal
+   */
+  closeSupplierModal() {
+    this.elements.supplierModal.style.display = 'none';
+  }
+
+  /**
+   * Populate supplier list
+   */
+  populateSupplierList(filter = '') {
+    const list = this.elements.supplierList;
+    list.innerHTML = '';
+
+    const normalizedFilter = filter.toLowerCase().trim();
+
+    // Get all suppliers
+    const allSuppliers = [
+      ...SUPPLIERS.priority.map((name) => ({ name, category: 'ספק מוכר' })),
+      ...SUPPLIERS.categories.fuelStations.suppliers.map((name) => ({
+        name,
+        category: 'תחנת דלק',
+      })),
+      ...SUPPLIERS.categories.supermarkets.suppliers.map((name) => ({
+        name,
+        category: 'רשתות מזון',
+      })),
+    ];
+
+    // Filter suppliers
+    const filteredSuppliers = allSuppliers.filter((supplier) =>
+      supplier.name.toLowerCase().includes(normalizedFilter)
+    );
+
+    // Create list items
+    filteredSuppliers.forEach((supplier) => {
+      const li = document.createElement('li');
+      li.className = 'supplier-item';
+
+      li.innerHTML = `
+        <div class="supplier-name">${supplier.name}</div>
+        <div class="supplier-category">${supplier.category}</div>
+      `;
+
+      li.addEventListener('click', () => {
+        this.selectSupplier(supplier.name);
+      });
+
+      list.appendChild(li);
+    });
+
+    // Show message if no results
+    if (filteredSuppliers.length === 0) {
+      const li = document.createElement('li');
+      li.style.padding = 'var(--spacing-md)';
+      li.style.textAlign = 'center';
+      li.style.color = 'var(--text-secondary)';
+      li.textContent = 'לא נמצאו תוצאות';
+      list.appendChild(li);
+    }
+  }
+
+  /**
+   * Filter suppliers based on search
+   */
+  filterSuppliers(query) {
+    this.populateSupplierList(query);
+  }
+
+  /**
+   * Select a supplier from the modal
+   */
+  selectSupplier(supplierName) {
+    this.editedData.supplier_name = supplierName;
+    this.elements.supplierValue.textContent = supplierName;
+
+    // Determine category
+    if (SUPPLIERS.priority.includes(supplierName)) {
+      this.editedData.supplier_category = 'priority';
+      this.elements.supplierCategory.style.display = 'none';
+    } else if (
+      SUPPLIERS.categories.fuelStations.suppliers.includes(supplierName)
+    ) {
+      this.editedData.supplier_category = 'fuel_station';
+      this.elements.supplierCategory.textContent = 'קטגוריה: תחנת דלק';
+      this.elements.supplierCategory.style.display = 'block';
+    } else if (SUPPLIERS.categories.supermarkets.suppliers.includes(supplierName)) {
+      this.editedData.supplier_category = 'supermarket';
+      this.elements.supplierCategory.textContent = 'קטגוריה: רשתות מזון';
+      this.elements.supplierCategory.style.display = 'block';
+    }
+
+    this.closeSupplierModal();
   }
 
   /**
@@ -356,16 +705,16 @@ class InvoiceScanner {
    * Handle errors
    */
   handleError(error) {
-    let errorMsg = '⌛ שגיאה בניתוח החשבונית';
+    let errorMsg = 'שגיאה בניתוח החשבונית';
 
     if (error.message.includes('API_KEY') || error.message.includes('API key')) {
-      errorMsg = '⌛ מפתח API לא תקין';
+      errorMsg = 'מפתח API לא תקין';
     } else if (error.message.includes('quota') || error.message.includes('QUOTA')) {
-      errorMsg = '⌛ חרגת ממכסת השימוש היומית';
+      errorMsg = 'חרגת ממכסת השימוש היומית';
     } else if (error.message.includes('Rate limit')) {
-      errorMsg = '⌛ יותר מדי בקשות. מנסה שוב...';
+      errorMsg = 'יותר מדי בקשות. מנסה שוב...';
     } else if (error.message.includes('network') || error.message.includes('fetch')) {
-      errorMsg = '⌛ בעיית תקשורת - בדוק חיבור לאינטרנט';
+      errorMsg = 'בעיית תקשורת - בדוק חיבור לאינטרנט';
     }
 
     this.showStatus(errorMsg, 'error');
@@ -381,6 +730,8 @@ class InvoiceScanner {
     this.selectedFile = null;
     this.imageBase64 = null;
     this.currentResult = null;
+    this.editedData = {};
+    this.editMode = false;
 
     // Reset UI
     this.elements.uploadZone.style.display = 'block';
@@ -390,12 +741,15 @@ class InvoiceScanner {
     this.elements.processBtn.disabled = true;
     this.elements.fileInput.value = '';
 
+    // Exit edit mode if active
+    this.exitEditMode();
+
     // Scroll to top
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   /**
-   * Send data to Google Sheets with proper date formatting
+   * Send data to Google Sheets
    */
   async sendToGoogleSheets() {
     if (!this.currentResult) {
@@ -405,34 +759,26 @@ class InvoiceScanner {
 
     // Check if Google Sheets is configured
     if (!CONFIG.SHEETS_CONFIG.scriptUrl) {
-      this.showStatus('⚠️ יש להגדיר את Google Sheets ב-config.js', 'warning');
+      this.showStatus('יש להגדיר את Google Sheets ב-config.js', 'warning');
       return;
     }
 
     try {
-      this.elements.sendToSheetsBtn.disabled = true;
+      this.elements.approveAndSendBtn.disabled = true;
       this.showStatus('שולח נתונים ל-Google Sheets...', 'info');
 
-      // Prepare data for Google Sheets - send in correct format
+      // Merge original data with edited data
       const dataToSend = {
-        // Supplier information - send category KEY not Hebrew name
-        supplier_category: this.currentResult.supplier_category, // e.g., "priority", "fuel_station"
-        supplier_name: this.currentResult.supplier_name || '',
-
-        // Document information - send type KEY not Hebrew text
-        document_number: this.currentResult.document_number || '',
-        document_type: this.currentResult.document_type, // e.g., "invoice", "delivery_note"
-
-        // Date - already in DD/MM/YYYY format from Gemini
-        document_date: this.currentResult.document_date || '',
-
-        // Amount - send as string
-        total_amount: this.currentResult.total_amount || '',
-
-        // Credit card (optional)
-        credit_card_last4: this.currentResult.credit_card_last4 || '',
-
-        // Optional notes
+        supplier_category:
+          this.editedData.supplier_category || this.currentResult.supplier_category,
+        supplier_name: this.editedData.supplier_name || this.currentResult.supplier_name || '',
+        document_number:
+          this.editedData.document_number || this.currentResult.document_number || '',
+        document_type: this.currentResult.document_type,
+        document_date: this.editedData.document_date || this.currentResult.document_date || '',
+        total_amount: this.editedData.total_amount || this.currentResult.total_amount || '',
+        credit_card_last4:
+          this.editedData.credit_card_last4 || this.currentResult.credit_card_last4 || '',
         notes: this.currentResult.notes || '',
       };
 
@@ -450,15 +796,20 @@ class InvoiceScanner {
 
       // Note: With no-cors mode, we can't read the response
       // but we can assume success if no error was thrown
-      this.showStatus('✅ הנתונים נשלחו בהצלחה ל-Google Sheets!', 'success');
+      this.showStatus('הנתונים נשלחו בהצלחה ל-Google Sheets!', 'success');
+
+      // Exit edit mode if active
+      if (this.editMode) {
+        this.exitEditMode();
+      }
 
       // Log success
       console.log('Data sent successfully to Google Sheets');
     } catch (error) {
       console.error('Sheets error:', error);
-      this.showStatus('⌛ שגיאה בשליחת הנתונים', 'error');
+      this.showStatus('שגיאה בשליחת הנתונים', 'error');
     } finally {
-      this.elements.sendToSheetsBtn.disabled = false;
+      this.elements.approveAndSendBtn.disabled = false;
     }
   }
 }
@@ -466,5 +817,5 @@ class InvoiceScanner {
 // Initialize application when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
   window.app = new InvoiceScanner();
-  console.log('Invoice Scanner initialized');
+  console.log('Zuza Patisserie Invoice Scanner initialized');
 });

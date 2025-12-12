@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
-    <title>סורק חשבוניות חכם</title>
+    <title>סורק חשבוניות | Zuza Patisserie</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -18,15 +18,20 @@
   <body>
     <div class="app-container">
       <header class="app-header">
-        <h1 class="app-title">📄 סורק חשבוניות</h1>
-        <p class="app-subtitle">זיהוי אוטומטי מבוסס AI</p>
+        <h1 class="app-title">Zuza Patisserie</h1>
+        <p class="app-subtitle">סורק חשבוניות חכם</p>
       </header>
 
       <main class="app-main">
         <!-- Upload Section -->
         <section class="upload-section" id="uploadSection">
           <div class="upload-zone" id="uploadZone">
-            <div class="upload-icon">📸</div>
+            <div class="upload-icon">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path>
+              </svg>
+            </div>
             <p class="upload-text">לחץ לצילום או העלאת חשבונית</p>
             <p class="upload-hint">תומך בכל פורמטי תמונה</p>
             <input type="file" id="fileInput" accept="image/*" capture="environment" hidden />
@@ -35,16 +40,10 @@
           <!-- Image Preview -->
           <div class="preview-container" id="previewContainer" style="display: none">
             <img id="previewImage" alt="תצוגה מקדימה" />
-            <button class="retake-btn" id="retakeBtn">
-              <span class="btn-icon">🔄</span>
-              צלם מחדש
-            </button>
+            <button class="retake-btn" id="retakeBtn">צלם מחדש</button>
           </div>
 
-          <button class="process-btn" id="processBtn" disabled>
-            <span class="btn-icon">🔍</span>
-            נתח חשבונית
-          </button>
+          <button class="process-btn" id="processBtn" disabled>נתח חשבונית</button>
         </section>
 
         <!-- Loading State -->
@@ -52,6 +51,7 @@
           <div class="loading-spinner"></div>
           <p class="loading-text">מנתח את החשבונית...</p>
           <p class="loading-subtext">זה עשוי לקחת מספר שניות</p>
+          <p class="loading-progress" id="loadingProgress"></p>
         </div>
 
         <!-- Status Messages -->
@@ -61,9 +61,20 @@
         <section class="results-section" id="resultsSection" style="display: none">
           <h2 class="results-title">תוצאות הניתוח</h2>
 
-          <div class="result-card">
+          <!-- Action Buttons -->
+          <div class="action-buttons" id="actionButtons">
+            <button class="edit-btn" id="editBtn">עריכה</button>
+            <button class="primary-btn" id="approveAndSendBtn">אישור ושליחה</button>
+          </div>
+
+          <!-- Result Cards -->
+          <div class="result-card" id="supplierCard" data-field="supplier">
             <div class="result-header">
-              <span class="result-icon">🏢</span>
+              <div class="result-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+                </svg>
+              </div>
               <span class="result-label">ספק</span>
             </div>
             <div class="result-content">
@@ -74,9 +85,13 @@
             </div>
           </div>
 
-          <div class="result-card">
+          <div class="result-card" id="documentNumberCard" data-field="document_number">
             <div class="result-header">
-              <span class="result-icon">🔢</span>
+              <div class="result-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"></path>
+                </svg>
+              </div>
               <span class="result-label">מספר מסמך</span>
             </div>
             <div class="result-content">
@@ -86,9 +101,13 @@
             </div>
           </div>
 
-          <div class="result-card">
+          <div class="result-card" id="dateCard" data-field="date">
             <div class="result-header">
-              <span class="result-icon">📅</span>
+              <div class="result-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                </svg>
+              </div>
               <span class="result-label">תאריך</span>
             </div>
             <div class="result-content">
@@ -97,9 +116,13 @@
             </div>
           </div>
 
-          <div class="result-card">
+          <div class="result-card" id="amountCard" data-field="amount">
             <div class="result-header">
-              <span class="result-icon">💰</span>
+              <div class="result-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+              </div>
               <span class="result-label">סכום</span>
             </div>
             <div class="result-content">
@@ -108,9 +131,13 @@
             </div>
           </div>
 
-          <div class="result-card" id="creditCardCard" style="display: none">
+          <div class="result-card" id="creditCardCard" style="display: none" data-field="credit_card">
             <div class="result-header">
-              <span class="result-icon">💳</span>
+              <div class="result-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path>
+                </svg>
+              </div>
               <span class="result-label">כרטיס אשראי</span>
             </div>
             <div class="result-content">
@@ -119,27 +146,19 @@
             </div>
           </div>
 
-          <button class="secondary-btn" id="newScanBtn">
-            <span class="btn-icon">➕</span>
-            סרוק חשבונית נוספת
-          </button>
-
-          <button class="primary-btn" id="sendToSheetsBtn">
-            <span class="btn-icon">📊</span>
-            שלח ל-Google Sheets
-          </button>
+          <button class="secondary-btn" id="newScanBtn">סרוק חשבונית נוספת</button>
         </section>
 
         <!-- Usage Statistics -->
         <section class="usage-section" id="usageSection" style="display: none">
-          <h3 class="usage-title">📊 נתוני שימוש</h3>
+          <h3 class="usage-title">נתוני שימוש</h3>
           <div class="usage-grid">
             <div class="usage-item">
-              <span class="usage-label">טוקנים בסריקה:</span>
+              <span class="usage-label">טוקנים בסריקה</span>
               <span class="usage-value" id="currentTokens">-</span>
             </div>
             <div class="usage-item">
-              <span class="usage-label">סה"כ היום:</span>
+              <span class="usage-label">סה"כ היום</span>
               <span class="usage-value" id="dailyTokens">-</span>
             </div>
           </div>
@@ -147,8 +166,28 @@
       </main>
 
       <footer class="app-footer">
-        <p>מופעל על ידי Google Gemini 2.0 Flash Lite ✨</p>
+        <p>© 2025 Zuza Patisserie</p>
       </footer>
+    </div>
+
+    <!-- Supplier Search Modal -->
+    <div class="modal-overlay" id="supplierModal" style="display: none">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 class="modal-title">בחירת ספק</h3>
+          <button class="modal-close" id="modalClose">&times;</button>
+        </div>
+        <div class="modal-body">
+          <input
+            type="text"
+            class="search-input"
+            id="supplierSearch"
+            placeholder="חפש ספק..."
+            autocomplete="off"
+          />
+          <ul class="supplier-list" id="supplierList"></ul>
+        </div>
+      </div>
     </div>
 
     <script src="config.js"></script>
