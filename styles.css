@@ -525,8 +525,34 @@ button {
 }
 
 /* Edit Mode */
-.edit-mode .result-card {
+.result-card.editable {
   cursor: pointer;
+  position: relative;
+  border: 2px solid var(--gold);
+  background: var(--cream);
+}
+
+.result-card.editable::after {
+  content: 'לחץ לעריכה';
+  position: absolute;
+  top: var(--spacing-sm);
+  left: var(--spacing-sm);
+  font-size: 11px;
+  color: var(--gold-dark);
+  font-weight: 600;
+  background: var(--white);
+  padding: 2px 8px;
+  border-radius: 4px;
+  opacity: 0.8;
+}
+
+.result-card.editable:hover {
+  border-color: var(--gold-dark);
+  box-shadow: var(--shadow-md);
+}
+
+.result-card.editable:hover::after {
+  opacity: 1;
 }
 
 .edit-field {

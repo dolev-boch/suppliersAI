@@ -132,7 +132,11 @@ class InvoiceScanner {
 
     // Action buttons
     this.elements.editBtn.addEventListener('click', () => {
-      this.enterEditMode();
+      if (this.editMode) {
+        this.exitEditMode();
+      } else {
+        this.enterEditMode();
+      }
     });
 
     this.elements.approveAndSendBtn.addEventListener('click', () => {
@@ -358,6 +362,7 @@ class InvoiceScanner {
    * Enter edit mode
    */
   enterEditMode() {
+    console.log('🔧 Entering edit mode');
     this.editMode = true;
     this.elements.editBtn.textContent = 'בטל עריכה';
     this.elements.approveAndSendBtn.textContent = 'שמור ושלח';
@@ -375,10 +380,18 @@ class InvoiceScanner {
     }
 
     editableCards.forEach(({ card, field, isSupplier }) => {
+      if (!card) {
+        console.error(`Card not found for field: ${field}`);
+        return;
+      }
+
+      console.log(`Making ${field} editable`);
       card.classList.add('editable');
       card.style.cursor = 'pointer';
 
-      const clickHandler = () => {
+      const clickHandler = (e) => {
+        e.stopPropagation();
+        console.log(`Card clicked: ${field}`);
         if (isSupplier) {
           this.openSupplierModal();
         } else {
@@ -396,14 +409,14 @@ class InvoiceScanner {
       card.addEventListener('click', clickHandler);
     });
 
-    // Update button handler
-    this.elements.editBtn.onclick = () => this.exitEditMode();
+    console.log('✅ Edit mode activated. Click on any card to edit.');
   }
 
   /**
    * Exit edit mode
    */
   exitEditMode() {
+    console.log('❌ Exiting edit mode');
     this.editMode = false;
     this.elements.editBtn.textContent = 'עריכה';
     this.elements.approveAndSendBtn.textContent = 'אישור ושליחה';
@@ -419,8 +432,7 @@ class InvoiceScanner {
       }
     });
 
-    // Restore button handler
-    this.elements.editBtn.onclick = () => this.enterEditMode();
+    console.log('✅ Edit mode deactivated');
   }
 
   /**
