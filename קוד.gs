@@ -1,20 +1,12 @@
 /**
- * Google Apps Script for Invoice Scanner - Updated for Existing Sheet Structure
+ * Google Apps Script for Invoice Scanner - UPDATED WITH DATE FIX
  *
  * Sheet ID: 1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM
  *
- * Setup Instructions:
- * 1. Open your Google Sheet
- * 2. Go to Extensions > Apps Script
- * 3. Delete any existing code
- * 4. Paste this entire script
- * 5. Save (Ctrl+S)
- * 6. Deploy as Web App:
- *    - Click Deploy > New deployment
- *    - Select type: Web app
- *    - Execute as: Me
- *    - Who has access: Anyone
- * 7. Copy the Web app URL to config.js
+ * CHANGES IN THIS VERSION:
+ * - Added parseIsraeliDate() function to convert DD/MM/YYYY to Date object
+ * - Updated addDataToSheet() to use proper date conversion (line 228-237)
+ * - Date now displays correctly in DD/MM/YYYY format in Google Sheets
  */
 
 // Starting row for data entry (always row 5)
@@ -192,7 +184,7 @@ function getSheetInfo(data) {
 }
 
 /**
- * Add data to the appropriate sheet
+ * Add data to the appropriate sheet - WITH FIXED DATE HANDLING
  */
 function addDataToSheet(sheetInfo, data) {
   try {
@@ -225,9 +217,20 @@ function addDataToSheet(sheetInfo, data) {
     const isDeliveryNote = data.document_type === 'delivery_note';
     const isInvoice = data.document_type === 'invoice';
 
-    // B - תאריך אספקה (Document Date)
+    // ⭐ B - תאריך אספקה (Document Date) - FIXED DATE HANDLING
     if (data.document_date) {
-      sheet.getRange(targetRow, columns.DATE).setValue(data.document_date);
+      // Convert DD/MM/YYYY string to proper Date object
+      const dateObj = parseIsraeliDate(data.document_date);
+      if (dateObj) {
+        sheet.getRange(targetRow, columns.DATE).setValue(dateObj);
+        // Set number format to DD/MM/YYYY
+        sheet.getRange(targetRow, columns.DATE).setNumberFormat('dd/mm/yyyy');
+        Logger.log('✅ Date set successfully: ' + data.document_date + ' -> ' + dateObj.toString());
+      } else {
+        // Fallback: write as string if parsing fails
+        sheet.getRange(targetRow, columns.DATE).setValue(data.document_date);
+        Logger.log('⚠️ Date parsing failed, using string: ' + data.document_date);
+      }
     }
 
     // C - מס' תעודת משלוח (Delivery Note Number)
@@ -274,11 +277,62 @@ function addDataToSheet(sheetInfo, data) {
     // Apply formatting
     formatDataRow(sheet, targetRow, useSpecialColumns);
 
-    Logger.log('Data written successfully to row ' + targetRow);
+    Logger.log('✅ Data written successfully to row ' + targetRow);
     return true;
   } catch (error) {
-    Logger.log('Error adding data: ' + error.toString());
+    Logger.log('❌ Error adding data: ' + error.toString());
     return false;
+  }
+}
+
+/**
+ * ⭐ Parse Israeli date format DD/MM/YYYY to Date object
+ * This is the KEY FIX for the date format issue
+ */
+function parseIsraeliDate(dateString) {
+  if (!dateString) return null;
+
+  try {
+    // Expected format: DD/MM/YYYY
+    const parts = dateString.trim().split('/');
+
+    if (parts.length !== 3) {
+      Logger.log('Invalid date format: ' + dateString);
+      return null;
+    }
+
+    const day = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10);
+    const year = parseInt(parts[2], 10);
+
+    // Validate
+    if (isNaN(day) || isNaN(month) || isNaN(year)) {
+      Logger.log('Date parsing failed - invalid numbers: ' + dateString);
+      return null;
+    }
+
+    if (day < 1 || day > 31 || month < 1 || month > 12 || year < 2000) {
+      Logger.log('Date validation failed: ' + dateString);
+      return null;
+    }
+
+    // Create Date object (month is 0-indexed in JavaScript)
+    // Set time to noon to avoid timezone issues
+    const dateObj = new Date(year, month - 1, day, 12, 0, 0);
+
+    // Verify the date is valid
+    if (dateObj.getDate() !== day || dateObj.getMonth() !== month - 1) {
+      Logger.log('Invalid date created: ' + dateString);
+      return null;
+    }
+
+    Logger.log(
+      '✅ Date parsed successfully: ' + dateString + ' -> ' + dateObj.toLocaleDateString('he-IL')
+    );
+    return dateObj;
+  } catch (error) {
+    Logger.log('❌ Error parsing date ' + dateString + ': ' + error.toString());
+    return null;
   }
 }
 
@@ -337,7 +391,7 @@ function testSetup() {
     supplier_name: 'אלכס ברק',
     document_number: '123456789',
     document_type: 'invoice',
-    document_date: '12/12/2024',
+    document_date: '15/01/2025',
     total_amount: '150.00',
     notes: 'בדיקה',
   };
@@ -360,7 +414,7 @@ function testSetup() {
     supplier_name: 'פז',
     document_number: '987654321',
     document_type: 'invoice',
-    document_date: '12/12/2024',
+    document_date: '20/01/2025',
     total_amount: '250.00',
     credit_card_last4: '1234',
   };
@@ -377,6 +431,7 @@ function testSetup() {
 
   Logger.log('---');
   Logger.log('Test completed. Check your sheets for the test entries.');
+  Logger.log('Dates should appear as DD/MM/YYYY format (15/01/2025 and 20/01/2025)');
 }
 
 /**

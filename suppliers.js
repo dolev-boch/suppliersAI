@@ -37,6 +37,48 @@ const SUPPLIERS = {
     'תבליני כהן',
   ],
 
+  // Transliteration aliases for suppliers (English/mixed spellings on invoices)
+  // Maps common English spellings to the correct Hebrew supplier name
+  transliterations: {
+    // מקאנו variations
+    meckano: 'מקאנו',
+    mecano: 'מקאנו',
+    makano: 'מקאנו',
+    meccano: 'מקאנו',
+
+    // נטפים variations
+    netafim: 'נטפים',
+    natafim: 'נטפים',
+
+    // פוליבה variations
+    poliva: 'פוליבה',
+    polyva: 'פוליבה',
+    poliba: 'פוליבה',
+
+    // פפירוס variations
+    papyrus: 'פפירוס',
+    papirus: 'פפירוס',
+
+    // בזק variations
+    bezeq: 'בזק',
+    bezek: 'בזק',
+
+    // ארגל variations
+    argel: 'ארגל',
+    argal: 'ארגל',
+
+    // אקיופוז variations
+    ekufuz: 'אקיופוז',
+    akufuz: 'אקיופוז',
+    equfuz: 'אקיופוז',
+
+    // פריניב variations
+    priniv: 'פריניב',
+    preyniv: 'פריניב',
+
+    // Add more as you discover them on invoices
+  },
+
   // Categories - only checked if no priority supplier match
   categories: {
     fuelStations: {
@@ -108,7 +150,19 @@ const SupplierMatcher = {
   findPriorityMatch(text) {
     const normalized = this.normalize(text);
 
-    // Exact match
+    // 1. Check transliteration aliases first (for English spellings)
+    for (const [englishName, hebrewName] of Object.entries(SUPPLIERS.transliterations)) {
+      if (normalized.includes(englishName)) {
+        return {
+          matched: true,
+          supplier: hebrewName,
+          confidence: 95,
+          matchType: 'transliteration',
+        };
+      }
+    }
+
+    // 2. Exact match (Hebrew)
     for (const supplier of SUPPLIERS.priority) {
       if (this.normalize(supplier) === normalized) {
         return {
@@ -120,7 +174,20 @@ const SupplierMatcher = {
       }
     }
 
-    // Fuzzy match (high threshold)
+    // 3. Partial match (supplier name contained in text)
+    for (const supplier of SUPPLIERS.priority) {
+      const normalizedSupplier = this.normalize(supplier);
+      if (normalized.includes(normalizedSupplier) || normalizedSupplier.includes(normalized)) {
+        return {
+          matched: true,
+          supplier: supplier,
+          confidence: 90,
+          matchType: 'partial',
+        };
+      }
+    }
+
+    // 4. Fuzzy match (high threshold for typos)
     for (const supplier of SUPPLIERS.priority) {
       const similarity = this.calculateSimilarity(normalized, this.normalize(supplier));
       if (similarity > 0.85) {

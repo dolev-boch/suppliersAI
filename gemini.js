@@ -113,8 +113,17 @@ const GeminiService = {
 ### 1. ספקים בעדיפות (PRIORITY):
 "${prioritySuppliers}"
 
-אם לוגו/שם תואם לרשימה → supplier_category: "priority", supplier_name: [שם מדויק]
-**ספקים אלו אסור שיהיו: שונות, תחנת דלק, משתלות**
+**כללי זיהוי:**
+- חפש את שם הספק בכותרת, בלוגו, או בפרטי המוכר
+- שם יכול להיות בעברית או באנגלית (transliteration)
+- התעלם מהוספות כמו: בע"מ, בע״מ, בעמ, בע מ, LTD, Ltd
+- אם תמצא התאמה → supplier_category: "priority", supplier_name: [שם מדויק מהרשימה בעברית]
+- **ספקים אלו אסור שיהיו: שונות, תחנת דלק, רשתות מזון, משתלות**
+
+דוגמאות:
+- "MECKANO" או "Mecano" → מקאנו (priority)
+- "Netafim" או "נטפים" → נטפים (priority)
+- "Poliva Ltd." → פוליבה (priority)
 
 ### 2. קטגוריות מיוחדות (רק אם לא priority):
 
@@ -179,7 +188,9 @@ const GeminiService = {
     // Validate priority supplier match
     const priorityMatch = SupplierMatcher.findPriorityMatch(supplierName);
     if (priorityMatch.matched) {
-      console.log('✅ Priority supplier matched:', priorityMatch.supplier);
+      console.log(
+        `✅ Priority supplier matched: "${supplierName}" → "${priorityMatch.supplier}" (${priorityMatch.matchType})`
+      );
       return {
         ...response,
         supplier_category: 'priority',
@@ -232,7 +243,9 @@ const GeminiService = {
       }
 
       // Default to "other"
-      console.log('📦 No match found, categorized as other');
+      console.log(
+        `📦 No match found for "${supplierName}", categorized as other. Consider adding transliteration if this is a known supplier.`
+      );
       return {
         ...response,
         supplier_category: 'other',
