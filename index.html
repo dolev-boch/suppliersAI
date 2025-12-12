@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>סורק חשבוניות חכם</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-container">
+      <header class="app-header">
+        <h1 class="app-title">📄 סורק חשבוניות</h1>
+        <p class="app-subtitle">זיהוי אוטומטי מבוסס AI</p>
+      </header>
+
+      <main class="app-main">
+        <!-- Upload Section -->
+        <section class="upload-section" id="uploadSection">
+          <div class="upload-zone" id="uploadZone">
+            <div class="upload-icon">📸</div>
+            <p class="upload-text">לחץ לצילום או העלאת חשבונית</p>
+            <p class="upload-hint">תומך בכל פורמטי תמונה</p>
+            <input type="file" id="fileInput" accept="image/*" capture="environment" hidden />
+          </div>
+
+          <!-- Image Preview -->
+          <div class="preview-container" id="previewContainer" style="display: none">
+            <img id="previewImage" alt="תצוגה מקדימה" />
+            <button class="retake-btn" id="retakeBtn">
+              <span class="btn-icon">🔄</span>
+              צלם מחדש
+            </button>
+          </div>
+
+          <button class="process-btn" id="processBtn" disabled>
+            <span class="btn-icon">🔍</span>
+            נתח חשבונית
+          </button>
+        </section>
+
+        <!-- Loading State -->
+        <div class="loading-state" id="loadingState" style="display: none">
+          <div class="loading-spinner"></div>
+          <p class="loading-text">מנתח את החשבונית...</p>
+          <p class="loading-subtext">זה עשוי לקחת מספר שניות</p>
+        </div>
+
+        <!-- Status Messages -->
+        <div class="status-message" id="statusMessage" style="display: none"></div>
+
+        <!-- Results Section -->
+        <section class="results-section" id="resultsSection" style="display: none">
+          <h2 class="results-title">תוצאות הניתוח</h2>
+
+          <div class="result-card">
+            <div class="result-header">
+              <span class="result-icon">🏢</span>
+              <span class="result-label">ספק</span>
+            </div>
+            <div class="result-content">
+              <div class="result-value" id="supplierValue">-</div>
+              <div class="result-category" id="supplierCategory" style="display: none"></div>
+              <div class="result-note" id="supplierNote" style="display: none"></div>
+              <div class="confidence-badge" id="supplierConfidence"></div>
+            </div>
+          </div>
+
+          <div class="result-card">
+            <div class="result-header">
+              <span class="result-icon">🔢</span>
+              <span class="result-label">מספר מסמך</span>
+            </div>
+            <div class="result-content">
+              <div class="result-value" id="documentNumber">-</div>
+              <div class="document-type-badge" id="documentType"></div>
+              <div class="confidence-badge" id="documentConfidence"></div>
+            </div>
+          </div>
+
+          <div class="result-card">
+            <div class="result-header">
+              <span class="result-icon">📅</span>
+              <span class="result-label">תאריך</span>
+            </div>
+            <div class="result-content">
+              <div class="result-value" id="dateValue">-</div>
+              <div class="confidence-badge" id="dateConfidence"></div>
+            </div>
+          </div>
+
+          <div class="result-card">
+            <div class="result-header">
+              <span class="result-icon">💰</span>
+              <span class="result-label">סכום</span>
+            </div>
+            <div class="result-content">
+              <div class="result-value amount" id="amountValue">-</div>
+              <div class="confidence-badge" id="amountConfidence"></div>
+            </div>
+          </div>
+
+          <div class="result-card" id="creditCardCard" style="display: none">
+            <div class="result-header">
+              <span class="result-icon">💳</span>
+              <span class="result-label">כרטיס אשראי</span>
+            </div>
+            <div class="result-content">
+              <div class="result-value" id="creditCardValue">-</div>
+              <div class="confidence-badge" id="creditCardConfidence"></div>
+            </div>
+          </div>
+
+          <button class="secondary-btn" id="newScanBtn">
+            <span class="btn-icon">➕</span>
+            סרוק חשבונית נוספת
+          </button>
+
+          <button class="primary-btn" id="sendToSheetsBtn">
+            <span class="btn-icon">📊</span>
+            שלח ל-Google Sheets
+          </button>
+        </section>
+
+        <!-- Usage Statistics -->
+        <section class="usage-section" id="usageSection" style="display: none">
+          <h3 class="usage-title">📊 נתוני שימוש</h3>
+          <div class="usage-grid">
+            <div class="usage-item">
+              <span class="usage-label">טוקנים בסריקה:</span>
+              <span class="usage-value" id="currentTokens">-</span>
+            </div>
+            <div class="usage-item">
+              <span class="usage-label">סה"כ היום:</span>
+              <span class="usage-value" id="dailyTokens">-</span>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="app-footer">
+        <p>מופעל על ידי Google Gemini 2.0 Flash Lite ✨</p>
+      </footer>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="suppliers.js"></script>
+    <script src="gemini.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

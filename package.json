@@ -1,0 +1,24 @@
+{
+  "name": "invoice-scanner-ai",
+  "version": "1.0.0",
+  "description": "AI-powered invoice scanner using Google Gemini",
+  "main": "index.html",
+  "scripts": {
+    "dev": "npx http-server -p 3000 -c-1",
+    "deploy": "vercel --prod",
+    "preview": "vercel"
+  },
+  "keywords": [
+    "invoice",
+    "scanner",
+    "ocr",
+    "gemini",
+    "ai",
+    "hebrew"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}
