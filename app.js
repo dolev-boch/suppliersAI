@@ -94,7 +94,7 @@ class InvoiceScanner {
       if (file && file.type.startsWith('image/')) {
         this.handleFile(file);
       } else {
-        this.showStatus('אנא העלה קובץ תמונה בלבד', 'error');
+        this.showStatus('נא להעלות קובץ תמונה בלבד', 'error');
       }
     });
 
@@ -124,7 +124,7 @@ class InvoiceScanner {
    */
   handleFile(file) {
     if (!file.type.startsWith('image/')) {
-      this.showStatus('אנא בחר קובץ תמונה', 'error');
+      this.showStatus('נא לבחור קובץ תמונה', 'error');
       return;
     }
 
@@ -154,7 +154,7 @@ class InvoiceScanner {
    */
   async processInvoice() {
     if (!this.imageBase64) {
-      this.showStatus('אנא בחר תמונה תחילה', 'error');
+      this.showStatus('נא לבחור תמונה תחילה', 'error');
       return;
     }
 
@@ -164,7 +164,7 @@ class InvoiceScanner {
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
       if (!CONFIG.GEMINI_API_KEY) {
-        this.showStatus('❌ שגיאה בטעינת הגדרות. אנא רענן את הדף.', 'error');
+        this.showStatus('⌛ שגיאה בטעינת הגדרות. נא לרענן את הדף.', 'error');
         return;
       }
     }
@@ -186,7 +186,7 @@ class InvoiceScanner {
       const avgConfidence = GeminiService.calculateAverageConfidence(result);
 
       if (avgConfidence < CONFIG.CONFIDENCE_THRESHOLDS.LOW) {
-        this.showStatus('⚠️ איכות התמונה אינה מספקת. אנא צלם שוב בתאורה טובה יותר', 'warning');
+        this.showStatus('⚠️ איכות התמונה אינה מספקת. נא לצלם שוב בתאורה טובה יותר', 'warning');
       } else if (avgConfidence < CONFIG.CONFIDENCE_THRESHOLDS.MEDIUM) {
         this.showStatus('✅ החשבונית נותחה. חלק מהנתונים עשויים להיות לא מדויקים', 'info');
       } else {
@@ -356,14 +356,16 @@ class InvoiceScanner {
    * Handle errors
    */
   handleError(error) {
-    let errorMsg = '❌ שגיאה בניתוח החשבונית';
+    let errorMsg = '⌛ שגיאה בניתוח החשבונית';
 
     if (error.message.includes('API_KEY') || error.message.includes('API key')) {
-      errorMsg = '❌ מפתח API לא תקין';
+      errorMsg = '⌛ מפתח API לא תקין';
     } else if (error.message.includes('quota') || error.message.includes('QUOTA')) {
-      errorMsg = '❌ חרגת ממכסת השימוש היומית';
+      errorMsg = '⌛ חרגת ממכסת השימוש היומית';
+    } else if (error.message.includes('Rate limit')) {
+      errorMsg = '⌛ יותר מדי בקשות. מנסה שוב...';
     } else if (error.message.includes('network') || error.message.includes('fetch')) {
-      errorMsg = '❌ בעיית תקשורת - בדוק חיבור לאינטרנט';
+      errorMsg = '⌛ בעיית תקשורת - בדוק חיבור לאינטרנט';
     }
 
     this.showStatus(errorMsg, 'error');
@@ -393,7 +395,7 @@ class InvoiceScanner {
   }
 
   /**
-   * Send data to Google Sheets
+   * Send data to Google Sheets with proper date formatting
    */
   async sendToGoogleSheets() {
     if (!this.currentResult) {
@@ -411,39 +413,69 @@ class InvoiceScanner {
       this.elements.sendToSheetsBtn.disabled = true;
       this.showStatus('שולח נתונים ל-Google Sheets...', 'info');
 
+      // Get current timestamp in IL timezone
+      const now = new Date();
+      const ilTimestamp = new Intl.DateTimeFormat('he-IL', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZone: 'Asia/Jerusalem',
+      }).format(now);
+
       // Prepare data for Google Sheets
       const dataToSend = {
-        timestamp: new Date().toISOString(),
+        // Timestamp when sent
+        timestamp: ilTimestamp,
+
+        // Supplier information
         supplier_category: GeminiService.getCategoryName(this.currentResult.supplier_category),
-        supplier_name: this.currentResult.supplier_name,
-        document_number: this.currentResult.document_number,
+        supplier_name: this.currentResult.supplier_name || '',
+
+        // Document information
+        document_number: this.currentResult.document_number || '',
         document_type:
           this.currentResult.document_type === 'invoice' ? 'חשבונית מס' : 'תעודת משלוח',
-        document_date: this.currentResult.document_date,
-        total_amount: this.currentResult.total_amount,
+
+        // Date - already in DD/MM/YYYY format from Gemini
+        document_date: this.currentResult.document_date || '',
+
+        // Amount
+        total_amount: this.currentResult.total_amount || '',
+
+        // Credit card (optional)
         credit_card_last4: this.currentResult.credit_card_last4 || '',
-        confidences: {
-          supplier: this.currentResult.supplier_confidence,
-          document: this.currentResult.document_number_confidence,
-          date: this.currentResult.date_confidence,
-          amount: this.currentResult.total_confidence,
-        },
+
+        // Confidence scores
+        supplier_confidence: this.currentResult.supplier_confidence || 0,
+        document_confidence: this.currentResult.document_number_confidence || 0,
+        date_confidence: this.currentResult.date_confidence || 0,
+        amount_confidence: this.currentResult.total_confidence || 0,
       };
+
+      console.log('Sending to Google Sheets:', dataToSend);
 
       // Send to Google Sheets via Apps Script
       const response = await fetch(CONFIG.SHEETS_CONFIG.scriptUrl, {
         method: 'POST',
-        mode: 'no-cors',
+        mode: 'no-cors', // Required for Google Apps Script
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(dataToSend),
       });
 
+      // Note: With no-cors mode, we can't read the response
+      // but we can assume success if no error was thrown
       this.showStatus('✅ הנתונים נשלחו בהצלחה ל-Google Sheets!', 'success');
+
+      // Log success
+      console.log('Data sent successfully to Google Sheets');
     } catch (error) {
       console.error('Sheets error:', error);
-      this.showStatus('❌ שגיאה בשליחת הנתונים', 'error');
+      this.showStatus('⌛ שגיאה בשליחת הנתונים', 'error');
     } finally {
       this.elements.sendToSheetsBtn.disabled = false;
     }

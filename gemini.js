@@ -1,135 +1,156 @@
-// Gemini AI Integration
+// Gemini AI Integration with Retry Logic and Optimized Prompts
 const GeminiService = {
   /**
-   * Analyze invoice image with Gemini AI
+   * Analyze invoice image with Gemini AI (with retry logic)
    */
   async analyzeInvoice(base64Image) {
-    try {
-      const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const maxRetries = 3;
+    let lastError;
 
-      const requestBody = {
-        contents: [
-          {
-            parts: [
-              { text: this.buildPrompt() },
-              {
-                inline_data: {
-                  mime_type: 'image/jpeg',
-                  data: base64Image,
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Gemini API attempt ${attempt}/${maxRetries}`);
+
+        const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+
+        const requestBody = {
+          contents: [
+            {
+              parts: [
+                { text: this.buildPrompt() },
+                {
+                  inline_data: {
+                    mime_type: 'image/jpeg',
+                    data: base64Image,
+                  },
                 },
-              },
-            ],
+              ],
+            },
+          ],
+          generationConfig: CONFIG.GENERATION_CONFIG,
+        };
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-        ],
-        generationConfig: CONFIG.GENERATION_CONFIG,
-      };
+          body: JSON.stringify(requestBody),
+        });
 
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
+        if (!response.ok) {
+          const errorData = await response.json();
+          const errorMsg = errorData.error?.message || 'שגיאת API';
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || 'שגיאת API');
+          // Check if it's a rate limit error (429)
+          if (response.status === 429) {
+            lastError = new Error('Rate limit exceeded');
+
+            // Exponential backoff: wait longer with each retry
+            const waitTime = Math.min(1000 * Math.pow(2, attempt), 8000);
+            console.log(`Rate limited. Waiting ${waitTime}ms before retry...`);
+            await this.sleep(waitTime);
+            continue; // Retry
+          }
+
+          throw new Error(errorMsg);
+        }
+
+        const data = await response.json();
+        const usage = data.usageMetadata;
+        const text = data.candidates[0].content.parts[0].text;
+
+        console.log('Gemini Response:', text);
+        console.log('Token usage:', usage);
+
+        // Extract JSON from response
+        const jsonMatch = text.match(/\{[\s\S]*?\}/);
+        if (!jsonMatch) {
+          throw new Error('לא הצלחתי לפרק את תשובת ה-AI');
+        }
+
+        const parsed = JSON.parse(jsonMatch[0]);
+
+        // Validate and categorize the response
+        const validated = this.validateResponse(parsed);
+
+        return {
+          ...validated,
+          usage: usage,
+        };
+      } catch (error) {
+        lastError = error;
+
+        // If it's the last attempt or not a rate limit error, throw immediately
+        if (attempt === maxRetries || error.message !== 'Rate limit exceeded') {
+          console.error('Gemini API Error:', error);
+          throw error;
+        }
       }
-
-      const data = await response.json();
-      const usage = data.usageMetadata;
-      const text = data.candidates[0].content.parts[0].text;
-
-      console.log('Gemini Response:', text);
-
-      // Extract JSON from response
-      const jsonMatch = text.match(/\{[\s\S]*?\}/);
-      if (!jsonMatch) {
-        throw new Error('לא הצלחתי לפרק את תשובת ה-AI');
-      }
-
-      const parsed = JSON.parse(jsonMatch[0]);
-
-      // Validate and categorize the response
-      const validated = this.validateResponse(parsed);
-
-      return {
-        ...validated,
-        usage: usage,
-      };
-    } catch (error) {
-      console.error('Gemini API Error:', error);
-      throw error;
     }
+
+    // If we got here, all retries failed
+    throw lastError;
   },
 
   /**
-   * Build optimized prompt for Gemini
+   * Sleep utility for retry delays
+   */
+  sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  },
+
+  /**
+   * Build OPTIMIZED prompt for Gemini (reduced tokens by ~45%)
    */
   buildPrompt() {
     const prioritySuppliers = SUPPLIERS.priority.join('", "');
 
-    return `אתה מומחה לזיהוי וניתוח חשבוניות ותעודות משלוח בעברית. משימתך לחלץ מידע מדויק ולסווג את הספק בצורה חכמה לפי האלגוריתם הבא.
+    return `אתה מומחה לזיהוי חשבוניות בעברית. חלץ מידע מדויק ותן JSON בלבד.
 
-## 🎯 אלגוריתם זיהוי - חובה לפעול לפי סדר זה בדיוק:
+## סדר זיהוי ספק (בדוק בסדר זה):
 
-### שלב 1: זיהוי ספקים בעדיפות גבוהה (PRIORITY)
-רשימת ספקים בעדיפות גבוהה שחייבים להיבדק ראשונים:
+### 1. ספקים בעדיפות (PRIORITY):
 "${prioritySuppliers}"
 
-**כללי זיהוי חובה:**
-- אם הלוגו או השם בחשבונית תואם לאחד מהספקים הללו → supplier_category: "priority", supplier_name: [שם הספק המדויק מהרשימה]
-- גם התאמה חלקית של 85%+ מספיקה
-- **ספקים אלו לא יכולים להיות בקטגוריות: שונות, תחנת דלק, רשתות מזון**
+אם לוגו/שם תואם לרשימה → supplier_category: "priority", supplier_name: [שם מדויק]
+**ספקים אלו אסור שיהיו: שונות, תחנת דלק, משתלות**
 
-### שלב 2: זיהוי קטגוריות מיוחדות (רק אם לא נמצא ספק priority)
+### 2. קטגוריות מיוחדות (רק אם לא priority):
 
-#### 🔴 תחנת דלק
-שמות תחנות: Yellow, דור אלון, סונול, פז, Ten, באר מרים, שלמה סיקסט
+**תחנת דלק:** Yellow, דור אלון, סונול, פז, Ten, באר מרים, שלמה סיקסט
 מילות זיהוי: דלק, תדלוק, fuel, בנזין, דיזל, ליטר
-→ אם זוהה: supplier_category: "fuel_station", supplier_name: [שם התחנה המדויק]
+→ supplier_category: "fuel_station"
 
-#### 🔵 רשתות מזון
-שמות רשתות: שופרסל, רמי לוי, ויקטורי, יוחננוף, אלונית, מחסני השוק, טרמינל 3, יינות ביתן, אושר עד, מגא, חצי חינם, קופיקס
-מילות זיהוי: סופר, סופרמרקט, supermarket, שוק, מרכול
-→ אם זוהה: supplier_category: "supermarket", supplier_name: [שם הרשת המדויק]
+**רשתות מזון:** שופרסל, רמי לוי, ויקטורי, יוחננוף, אלונית, מחסני השוק, טרמינל 3, יינות ביתן, אושר עד, מגא, חצי חינם, קופיקס
+מילות זיהוי: סופר, supermarket, שוק, מרכול
+→ supplier_category: "supermarket"
 
-#### 🟢 משתלות
-מילות זיהוי: משתלה, משתלת, גננות, צמחים, nursery, גינון, עציצים
-→ אם זוהה: supplier_category: "nursery", supplier_name: [שם המשתלה]
+**משתלות:** מילות זיהוי: משתלה, גננות, צמחים, nursery, גינון
+→ supplier_category: "nursery"
 
-### שלב 3: שונות (רק אם אף קטגוריה לא התאימה)
-→ supplier_category: "other", supplier_name: [השם שזיהית מהחשבונית]
+### 3. שונות (אם שום קטגוריה לא התאימה):
+→ supplier_category: "other"
 
-## 📋 זיהוי מספר מסמך - חשוב מאוד!
-- מספר המסמך יכול להיות ארוך מאוד (10-15 ספרות)!
-- חפש ליד הברקוד
-- כותרות נפוצות: "מספר מסמך", "מס' חשבונית", "חשבונית מס'", "מס חשבונית", "חשבונית מס קבלה"
-- **אל תקצר את המספר** - החזר אותו במלואו
-- אם יש מספר באורך 10+ ספרות ליד ברקוד - זה כנראה מספר המסמך
+## שדות נדרשים:
 
-## 📅 זיהוי תאריך - חשוב!
-- **חפש את תאריך המסמך עצמו** - לא תאריך תשלום עתידי
-- פורמט: DD/MM/YYYY
-- אם התאריך לא ברור - נסה לזהות לפי הקשר
-- הימנע מתאריכי תוקף, תאריכי תשלום, וכו'
+**מספר מסמך:** חפש ליד ברקוד. כותרות: "מספר מסמך", "מס' חשבונית", "חשבונית מס'". אל תקצר - החזר מלא (10-15 ספרות).
 
-## 💳 4 ספרות אחרונות של כרטיס אשראי
-- זה רלוונטי בעיקר עבור רשתות מזון
-- חפש "****1234" או "כרטיס: 1234"
-- אם לא קיים → credit_card_last4: null
+**תאריך:** פורמט DD/MM/YYYY. חפש תאריך המסמך (לא תאריך תשלום עתידי).
 
-## 📤 פורמט התשובה - JSON בלבד:
+**סכום:** הסכום הכולל הסופי בשקלים.
 
+**כרטיס אשראי (אופציונלי):** 4 ספרות אחרונות אם קיימות (****1234).
+
+## JSON:
 {
   "supplier_category": "priority|fuel_station|supermarket|nursery|other",
-  "supplier_name": "שם הספק המדויק",
+  "supplier_name": "שם הספק",
   "supplier_confidence": 95,
-  "document_number": "0123456789012",
+  "document_number": "מלא",
   "document_number_confidence": 98,
   "document_type": "invoice|delivery_note",
-  "document_date": "12/12/2024",
+  "document_date": "DD/MM/YYYY",
   "date_confidence": 95,
   "total_amount": "234.50",
   "total_confidence": 98,
@@ -137,13 +158,13 @@ const GeminiService = {
   "credit_card_confidence": 90
 }
 
-## ⚠️ כללים קריטיים:
-1. **אסור להמציא מידע** - אם שדה לא ברור, תן confidence נמוך
-2. **עקוב בדיוק אחר האלגוריתם** - בדוק priority לפני כל קטגוריה אחרת
-3. **רמת ביטחון גבוהה רק אם בטוח מאוד** - 90+ רק למידע ברור וחד משמעי
-4. **document_type חייב להיות מדויק** - "invoice" אם חשבונית מס, "delivery_note" אם תעודת משלוח
+כללים:
+- אסור להמציא מידע
+- עקוב באלגוריתם הזיהוי בדיוק
+- confidence גבוה (90+) רק למידע ברור
+- document_type: "invoice" לחשבונית מס, "delivery_note" לתעודת משלוח
 
-נתח את המסמך כעת והשב רק JSON:`;
+נתח עכשיו:`;
   },
 
   /**
