@@ -23,7 +23,8 @@ const CONFIG = {
 
   // Google Sheets Configuration
   SHEETS_CONFIG: {
-    scriptUrl: '', // Add your Google Apps Script deployment URL here
+    scriptUrl:
+      'https://script.google.com/macros/s/AKfycbzeipGgeu2nV_g3QIDr2eyDuffqYBoCG5Ds4T44LJUeISKoguMtB7Uj_GCZsnzkHQ0ikA/exec', // Add your Google Apps Script deployment URL here
     sheetId: '1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM',
   },
 
