@@ -158,6 +158,17 @@ class InvoiceScanner {
       return;
     }
 
+    // Wait for API key to load if not loaded yet
+    if (!CONFIG.GEMINI_API_KEY) {
+      this.showStatus('טוען הגדרות...', 'info');
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      if (!CONFIG.GEMINI_API_KEY) {
+        this.showStatus('❌ שגיאה בטעינת הגדרות. אנא רענן את הדף.', 'error');
+        return;
+      }
+    }
+
     try {
       // Show loading state
       this.elements.processBtn.disabled = true;
