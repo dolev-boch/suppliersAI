@@ -1,7 +1,6 @@
 // Configuration file
 const CONFIG = {
   // Gemini API Configuration
-  GEMINI_API_KEY: 'AIzaSyD4ZGDoIh59bITEGStQiBgS15sGAiTbcYc',
   GEMINI_MODEL: 'gemini-2.0-flash-lite',
   GEMINI_API_URL: 'https://generativelanguage.googleapis.com/v1beta/models',
 
