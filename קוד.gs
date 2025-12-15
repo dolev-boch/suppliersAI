@@ -212,17 +212,17 @@ function addDataToSheet(sheetInfo, data) {
     }
 
     // Find the correct position to insert (sorted by date, oldest to newest)
-    let targetRow = DATA_START_ROW;
-    let insertPosition = -1;
+    let targetRow = -1;
+    let shouldInsertNewRow = false;
 
     for (let row = DATA_START_ROW; row <= sheet.getMaxRows(); row++) {
       const existingDateValue = sheet.getRange(row, columns.DATE).getValue();
 
-      // If we hit an empty row, insert here
+      // If we hit an empty row, this is the end - just write here
       if (!existingDateValue || existingDateValue === '') {
         targetRow = row;
-        insertPosition = row;
-        Logger.log('📍 Found empty row at: ' + row);
+        shouldInsertNewRow = false;
+        Logger.log('📍 Found empty row at: ' + row + ' - appending here');
         break;
       }
 
@@ -232,20 +232,30 @@ function addDataToSheet(sheetInfo, data) {
       // If new date is older than existing date, insert before this row
       if (newDate < existingDate) {
         targetRow = row;
-        insertPosition = row;
-        Logger.log('📍 Found insertion point before row: ' + row + ' (new date is older)');
+        shouldInsertNewRow = true;
+        Logger.log('📍 Found insertion point before row: ' + row + ' (new date ' + data.document_date + ' is older than existing ' + existingDate.toLocaleDateString('he-IL') + ')');
         break;
       }
     }
 
-    // If we need to insert in the middle (not at the end), insert a new row
-    if (insertPosition > DATA_START_ROW && insertPosition < sheet.getMaxRows()) {
-      const nextRowValue = sheet.getRange(insertPosition, columns.DATE).getValue();
-      if (nextRowValue && nextRowValue !== '') {
-        // There's data at this position, insert a new row
-        sheet.insertRowBefore(insertPosition);
-        Logger.log('✅ Inserted new row at position: ' + insertPosition);
+    // If we didn't find any position, append to the very end
+    if (targetRow === -1) {
+      targetRow = DATA_START_ROW;
+      for (let row = DATA_START_ROW; row <= sheet.getMaxRows(); row++) {
+        const cellValue = sheet.getRange(row, columns.DATE).getValue();
+        if (!cellValue || cellValue === '') {
+          targetRow = row;
+          break;
+        }
       }
+      shouldInsertNewRow = false;
+      Logger.log('📍 No insertion point found, appending to end at row: ' + targetRow);
+    }
+
+    // Insert a new row if we're inserting in the middle of existing data
+    if (shouldInsertNewRow) {
+      sheet.insertRowBefore(targetRow);
+      Logger.log('✅ Inserted new row at position: ' + targetRow);
     }
 
     Logger.log('Writing to sheet: ' + sheet.getName() + ', row: ' + targetRow + ' (date: ' + data.document_date + ')');
@@ -292,7 +302,9 @@ function writeRowData(sheet, targetRow, columns, data, useSpecialColumns) {
 
   // D - סכום תעודת משלוח (Delivery Note Amount)
   if (isDeliveryNote && data.total_amount) {
-    sheet.getRange(targetRow, columns.DELIVERY_SUM).setValue(parseFloat(data.total_amount));
+    const amount = parseAmount(data.total_amount);
+    sheet.getRange(targetRow, columns.DELIVERY_SUM).setValue(amount);
+    Logger.log('✅ Delivery amount set: ' + data.total_amount + ' -> ' + amount);
   }
 
   // E - מס' חשבונית מס (Invoice Number)
@@ -302,7 +314,9 @@ function writeRowData(sheet, targetRow, columns, data, useSpecialColumns) {
 
   // F - סכום חשבונית מס (Invoice Amount)
   if (isInvoice && data.total_amount) {
-    sheet.getRange(targetRow, columns.INVOICE_SUM).setValue(parseFloat(data.total_amount));
+    const amount = parseAmount(data.total_amount);
+    sheet.getRange(targetRow, columns.INVOICE_SUM).setValue(amount);
+    Logger.log('✅ Invoice amount set: ' + data.total_amount + ' -> ' + amount);
   }
 
   // G - הערות (Notes)
@@ -382,6 +396,41 @@ function parseIsraeliDate(dateString) {
 }
 
 /**
+ * ⭐ Parse amount with comma separator (Israeli format)
+ * Handles: "1,760.50", "1760.50", "1,760", "1760"
+ */
+function parseAmount(amountString) {
+  if (!amountString) return 0;
+
+  try {
+    // Convert to string if not already
+    let str = String(amountString).trim();
+
+    // Remove any currency symbols (₪, NIS, etc.)
+    str = str.replace(/[₪$€£¥]/g, '');
+    str = str.replace(/NIS|ILS/gi, '');
+    str = str.trim();
+
+    // Remove commas (thousands separator in Israeli format: 1,760)
+    str = str.replace(/,/g, '');
+
+    // Parse the number
+    const amount = parseFloat(str);
+
+    if (isNaN(amount)) {
+      Logger.log('⚠️ Amount parsing failed for: ' + amountString + ', returning 0');
+      return 0;
+    }
+
+    Logger.log('✅ Amount parsed: ' + amountString + ' -> ' + amount);
+    return amount;
+  } catch (error) {
+    Logger.log('❌ Error parsing amount ' + amountString + ': ' + error.toString());
+    return 0;
+  }
+}
+
+/**
  * Format the data row
  */
 function formatDataRow(sheet, row, useSpecialColumns) {
@@ -430,18 +479,21 @@ function createResponse(success, message) {
  * Test function to verify the setup
  */
 function testSetup() {
-  // Test data for a priority supplier
+  Logger.log('🧪 Starting comprehensive tests...');
+  Logger.log('===================================');
+
+  // Test 1: Amount with comma separator (1,760)
   const testData1 = {
     supplier_category: 'priority',
     supplier_name: 'אלכס ברק',
     document_number: '123456789',
     document_type: 'invoice',
-    document_date: '15/01/2025',
-    total_amount: '150.00',
-    notes: 'בדיקה',
+    document_date: '15/12/2025',
+    total_amount: '1,760.50',
+    notes: 'Test: comma separator',
   };
 
-  Logger.log('Test 1: Priority Supplier (אלכס ברק)');
+  Logger.log('Test 1: Amount with comma (1,760.50) - Date: 15/12/2025');
   const sheetInfo1 = getSheetInfo(testData1);
   if (sheetInfo1.sheet) {
     Logger.log('✓ Sheet found: ' + sheetInfo1.sheet.getName());
@@ -453,18 +505,18 @@ function testSetup() {
 
   Logger.log('---');
 
-  // Test data for fuel station
+  // Test 2: Older date should be inserted before (date sorting test)
   const testData2 = {
-    supplier_category: 'fuel_station',
-    supplier_name: 'פז',
-    document_number: '987654321',
+    supplier_category: 'priority',
+    supplier_name: 'אלכס ברק',
+    document_number: '111222333',
     document_type: 'invoice',
-    document_date: '20/01/2025',
-    total_amount: '250.00',
-    credit_card_last4: '1234',
+    document_date: '01/12/2025',
+    total_amount: '500',
+    notes: 'Test: older date (should be inserted first)',
   };
 
-  Logger.log('Test 2: Fuel Station (תחנת דלק)');
+  Logger.log('Test 2: Older date (01/12/2025) - should be inserted BEFORE 15/12/2025');
   const sheetInfo2 = getSheetInfo(testData2);
   if (sheetInfo2.sheet) {
     Logger.log('✓ Sheet found: ' + sheetInfo2.sheet.getName());
@@ -475,8 +527,39 @@ function testSetup() {
   }
 
   Logger.log('---');
-  Logger.log('Test completed. Check your sheets for the test entries.');
-  Logger.log('Dates should appear as DD/MM/YYYY format (15/01/2025 and 20/01/2025)');
+
+  // Test 3: Newer date should be appended after
+  const testData3 = {
+    supplier_category: 'priority',
+    supplier_name: 'אלכס ברק',
+    document_number: '444555666',
+    document_type: 'delivery_note',
+    document_date: '20/12/2025',
+    total_amount: '2,500.75',
+    notes: 'Test: newer date (should be last)',
+  };
+
+  Logger.log('Test 3: Newer date (20/12/2025) - should be appended AFTER others');
+  const sheetInfo3 = getSheetInfo(testData3);
+  if (sheetInfo3.sheet) {
+    Logger.log('✓ Sheet found: ' + sheetInfo3.sheet.getName());
+    const success3 = addDataToSheet(sheetInfo3, testData3);
+    Logger.log(success3 ? '✓ Data added successfully' : '✗ Failed to add data');
+  } else {
+    Logger.log('✗ Sheet not found');
+  }
+
+  Logger.log('---');
+  Logger.log('✅ Test completed!');
+  Logger.log('Expected order in sheet (oldest to newest):');
+  Logger.log('1. 01/12/2025 - ₪500');
+  Logger.log('2. 15/12/2025 - ₪1,760.50');
+  Logger.log('3. 20/12/2025 - ₪2,500.75');
+  Logger.log('');
+  Logger.log('Check the "אלכס ברק" sheet to verify:');
+  Logger.log('- Amounts are correct (not showing "1" for "1,760")');
+  Logger.log('- Dates are sorted oldest to newest');
+  Logger.log('- No data was deleted or overwritten');
 }
 
 /**
