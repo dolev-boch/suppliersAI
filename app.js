@@ -27,6 +27,16 @@ class InvoiceScanner {
       previewImage: document.getElementById('previewImage'),
       processBtn: document.getElementById('processBtn'),
 
+      // Bulk upload section
+      bulkUploadSection: document.getElementById('bulkUploadSection'),
+      bulkUploadBtn: document.getElementById('bulkUploadBtn'),
+      bulkFileInput: document.getElementById('bulkFileInput'),
+      bulkProcessingState: document.getElementById('bulkProcessingState'),
+      bulkProcessingText: document.getElementById('bulkProcessingText'),
+      bulkProgressFill: document.getElementById('bulkProgressFill'),
+      bulkProgressDetails: document.getElementById('bulkProgressDetails'),
+      bulkResultsSummary: document.getElementById('bulkResultsSummary'),
+
       // Loading and status
       loadingState: document.getElementById('loadingState'),
       loadingProgress: document.getElementById('loadingProgress'),
@@ -169,6 +179,18 @@ class InvoiceScanner {
     this.elements.customSupplierName.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') {
         this.saveCustomSupplier();
+      }
+    });
+
+    // Bulk upload
+    this.elements.bulkUploadBtn.addEventListener('click', () => {
+      this.elements.bulkFileInput.click();
+    });
+
+    this.elements.bulkFileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      if (files.length > 0) {
+        this.processBulkFiles(files);
       }
     });
   }
@@ -786,13 +808,217 @@ class InvoiceScanner {
     this.elements.resultsSection.style.display = 'none';
     this.elements.statusMessage.style.display = 'none';
     this.elements.processBtn.disabled = true;
+    this.elements.processBtn.style.display = 'block';
     this.elements.fileInput.value = '';
+    this.elements.bulkFileInput.value = '';
+
+    // Show bulk upload section
+    this.elements.bulkUploadSection.style.display = 'block';
+
+    // Hide bulk processing state
+    this.elements.bulkProcessingState.style.display = 'none';
 
     // Exit edit mode if active
     this.exitEditMode();
 
     // Scroll to top
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  /**
+   * Process multiple files in bulk
+   */
+  async processBulkFiles(files) {
+    if (!files || files.length === 0) {
+      this.showStatus('לא נבחרו קבצים', 'error');
+      return;
+    }
+
+    console.log(`Starting bulk processing of ${files.length} files`);
+
+    // Hide upload section and single results
+    this.elements.uploadZone.style.display = 'none';
+    this.elements.previewContainer.style.display = 'none';
+    this.elements.processBtn.style.display = 'none';
+    this.elements.bulkUploadSection.style.display = 'none';
+    this.elements.resultsSection.style.display = 'none';
+    this.elements.statusMessage.style.display = 'none';
+
+    // Show bulk processing UI
+    this.elements.bulkProcessingState.style.display = 'block';
+    this.elements.bulkProgressFill.style.width = '0%';
+    this.elements.bulkResultsSummary.innerHTML = '';
+
+    const results = {
+      total: files.length,
+      processed: 0,
+      successful: 0,
+      failed: 0,
+      details: [],
+    };
+
+    // Process each file sequentially
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const fileNum = i + 1;
+
+      try {
+        this.elements.bulkProcessingText.textContent = `מעבד קובץ ${fileNum} מתוך ${files.length}`;
+        this.elements.bulkProgressDetails.textContent = `${fileNum}/${files.length} קבצים`;
+
+        // Update progress bar
+        const progressPercent = ((fileNum - 1) / files.length) * 100;
+        this.elements.bulkProgressFill.style.width = `${progressPercent}%`;
+
+        // Read file as base64
+        const base64Image = await this.readFileAsBase64(file);
+
+        // Analyze with Gemini
+        const result = await GeminiService.analyzeInvoice(base64Image);
+
+        // Send to Google Sheets immediately
+        await this.sendBulkDataToSheets(result);
+
+        results.successful++;
+        results.details.push({
+          fileName: file.name,
+          status: 'success',
+          supplier: result.supplier_name,
+          amount: result.total_amount,
+        });
+
+        console.log(`✅ File ${fileNum}/${files.length} processed: ${file.name}`);
+      } catch (error) {
+        console.error(`❌ Error processing file ${file.name}:`, error);
+        results.failed++;
+        results.details.push({
+          fileName: file.name,
+          status: 'failed',
+          error: error.message,
+        });
+      }
+
+      results.processed++;
+
+      // Update summary
+      this.updateBulkSummary(results);
+    }
+
+    // Completed
+    this.elements.bulkProgressFill.style.width = '100%';
+    this.elements.bulkProcessingText.textContent = 'העיבוד הושלם!';
+    this.elements.bulkProgressDetails.textContent = `${results.successful} הצליחו, ${results.failed} נכשלו`;
+
+    // Show final summary
+    this.showBulkCompletionMessage(results);
+
+    // Reset file input
+    this.elements.bulkFileInput.value = '';
+  }
+
+  /**
+   * Read file as base64
+   */
+  readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64 = e.target.result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /**
+   * Send bulk data to Google Sheets
+   */
+  async sendBulkDataToSheets(result) {
+    if (!CONFIG.SHEETS_CONFIG.scriptUrl) {
+      throw new Error('Google Sheets not configured');
+    }
+
+    const dataToSend = {
+      supplier_category: result.supplier_category,
+      supplier_name: result.supplier_name || '',
+      document_number: result.document_number || '',
+      document_type: result.document_type,
+      document_date: result.document_date || '',
+      total_amount: result.total_amount || '',
+      credit_card_last4: result.credit_card_last4 || '',
+      notes: result.notes || '',
+    };
+
+    console.log('Sending bulk data to Google Sheets:', dataToSend);
+
+    await fetch(CONFIG.SHEETS_CONFIG.scriptUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(dataToSend),
+    });
+
+    // Small delay to avoid rate limiting
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  /**
+   * Update bulk processing summary
+   */
+  updateBulkSummary(results) {
+    let summaryHTML = '<div class="bulk-summary-list">';
+
+    results.details.forEach((detail) => {
+      const icon =
+        detail.status === 'success'
+          ? '<span class="status-icon success">✓</span>'
+          : '<span class="status-icon failed">✗</span>';
+
+      const info =
+        detail.status === 'success'
+          ? `${detail.supplier} - ₪${detail.amount}`
+          : `שגיאה: ${detail.error}`;
+
+      summaryHTML += `
+        <div class="bulk-item ${detail.status}">
+          ${icon}
+          <span class="bulk-item-name">${detail.fileName}</span>
+          <span class="bulk-item-info">${info}</span>
+        </div>
+      `;
+    });
+
+    summaryHTML += '</div>';
+    this.elements.bulkResultsSummary.innerHTML = summaryHTML;
+  }
+
+  /**
+   * Show bulk completion message
+   */
+  showBulkCompletionMessage(results) {
+    setTimeout(() => {
+      let message = `נשלחו ${results.successful} מתוך ${results.total} קבצים בהצלחה`;
+
+      if (results.failed > 0) {
+        message += ` (${results.failed} נכשלו)`;
+      }
+
+      // Add a "New Bulk Scan" button
+      const newBulkBtn = document.createElement('button');
+      newBulkBtn.className = 'primary-btn';
+      newBulkBtn.textContent = 'סרוק קבצים נוספים';
+      newBulkBtn.style.marginTop = 'var(--spacing-lg)';
+      newBulkBtn.addEventListener('click', () => {
+        this.resetForNewScan();
+      });
+
+      this.elements.bulkResultsSummary.appendChild(newBulkBtn);
+
+      this.showStatus(message, results.failed === 0 ? 'success' : 'warning');
+    }, 500);
   }
 
   /**

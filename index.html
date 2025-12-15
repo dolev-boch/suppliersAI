@@ -43,6 +43,19 @@
           </div>
 
           <button class="process-btn" id="processBtn" disabled>נתח חשבונית</button>
+
+          <!-- Bulk Upload Section -->
+          <div class="bulk-upload-section" id="bulkUploadSection">
+            <div class="section-divider">או</div>
+            <button class="secondary-btn" id="bulkUploadBtn">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="20" height="20" style="margin-left: 8px;">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+              </svg>
+              העלאת קבצים מרובים
+            </button>
+            <input type="file" id="bulkFileInput" accept="image/*,application/pdf" multiple hidden />
+            <p class="bulk-hint">ניתן להעלות מספר תמונות או קבצי PDF בבת אחת</p>
+          </div>
         </section>
 
         <!-- Loading State -->
@@ -51,6 +64,17 @@
           <p class="loading-text">מנתח את החשבונית...</p>
           <p class="loading-subtext">זה עשוי לקחת מספר שניות</p>
           <p class="loading-progress" id="loadingProgress"></p>
+        </div>
+
+        <!-- Bulk Processing State -->
+        <div class="bulk-processing-state" id="bulkProcessingState" style="display: none">
+          <div class="loading-spinner"></div>
+          <p class="loading-text" id="bulkProcessingText">מעבד קבצים...</p>
+          <div class="bulk-progress-bar">
+            <div class="bulk-progress-fill" id="bulkProgressFill"></div>
+          </div>
+          <p class="bulk-progress-details" id="bulkProgressDetails">0/0 קבצים</p>
+          <div class="bulk-results-summary" id="bulkResultsSummary"></div>
         </div>
 
         <!-- Results Section -->
