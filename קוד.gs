@@ -274,6 +274,7 @@ function addDataToSheet(sheetInfo, data) {
 /**
  * Shift existing data down by one row (without inserting rows)
  * This preserves the static מספר סידורי in column A
+ * IMPORTANT: Shifts from BOTTOM to TOP to avoid overwriting data
  */
 function shiftDataDown(sheet, startRow, columns, useSpecialColumns) {
   try {
@@ -301,19 +302,23 @@ function shiftDataDown(sheet, startRow, columns, useSpecialColumns) {
     const endCol = useSpecialColumns ? 8 : 7; // H or G
     const numCols = endCol - startCol + 1;
 
-    // Read all data from startRow to lastRow (columns B to G/H)
-    const dataRange = sheet.getRange(startRow, startCol, lastRow - startRow + 1, numCols);
-    const dataValues = dataRange.getValues();
-    const dataFormats = dataRange.getNumberFormats();
+    // CRITICAL FIX: Shift data from BOTTOM to TOP to avoid overwriting
+    // Start from the last row and move backwards
+    for (let row = lastRow; row >= startRow; row--) {
+      // Read one row
+      const sourceRange = sheet.getRange(row, startCol, 1, numCols);
+      const rowValues = sourceRange.getValues();
+      const rowFormats = sourceRange.getNumberFormats();
 
-    Logger.log('Read ' + dataValues.length + ' rows of data');
+      // Write it one row down
+      const targetRange = sheet.getRange(row + 1, startCol, 1, numCols);
+      targetRange.setValues(rowValues);
+      targetRange.setNumberFormats(rowFormats);
 
-    // Write the data shifted down by one row
-    const targetRange = sheet.getRange(startRow + 1, startCol, dataValues.length, numCols);
-    targetRange.setValues(dataValues);
-    targetRange.setNumberFormats(dataFormats);
+      Logger.log('Shifted row ' + row + ' to row ' + (row + 1));
+    }
 
-    Logger.log('✅ Data shifted down successfully');
+    Logger.log('✅ Data shifted down successfully (' + (lastRow - startRow + 1) + ' rows)');
 
     // Clear the original startRow (will be overwritten with new data)
     sheet.getRange(startRow, startCol, 1, numCols).clearContent();

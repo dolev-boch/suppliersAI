@@ -25,7 +25,6 @@ class InvoiceScanner {
       fileInput: document.getElementById('fileInput'),
       previewContainer: document.getElementById('previewContainer'),
       previewImage: document.getElementById('previewImage'),
-      retakeBtn: document.getElementById('retakeBtn'),
       processBtn: document.getElementById('processBtn'),
 
       // Loading and status
@@ -126,11 +125,6 @@ class InvoiceScanner {
     // Process button
     this.elements.processBtn.addEventListener('click', () => {
       this.processInvoice();
-    });
-
-    // Retake button
-    this.elements.retakeBtn.addEventListener('click', () => {
-      this.elements.fileInput.click();
     });
 
     // Action buttons

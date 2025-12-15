@@ -40,7 +40,6 @@
           <!-- Image Preview -->
           <div class="preview-container" id="previewContainer" style="display: none">
             <img id="previewImage" alt="תצוגה מקדימה" />
-            <button class="retake-btn" id="retakeBtn">צלם מחדש</button>
           </div>
 
           <button class="process-btn" id="processBtn" disabled>נתח חשבונית</button>
@@ -57,8 +56,6 @@
         <!-- Results Section -->
         <section class="results-section" id="resultsSection" style="display: none">
           <h2 class="results-title">תוצאות הניתוח</h2>
-
-          <button class="secondary-btn" id="newScanBtn">סרוק חשבונית נוספת</button>
 
           <!-- Result Cards -->
           <div class="result-card" id="supplierCard" data-field="supplier">
@@ -147,6 +144,9 @@
 
           <!-- Status Messages below buttons -->
           <div class="status-message" id="statusMessage" style="display: none"></div>
+
+          <!-- New Scan Button at the end -->
+          <button class="secondary-btn" id="newScanBtn">סרוק חשבונית נוספת</button>
         </section>
 
         <!-- Usage Statistics -->
