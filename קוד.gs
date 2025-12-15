@@ -146,9 +146,9 @@ function getSheetInfo(data) {
     sheetName = SHEET_NAMES.nursery;
     useSpecialColumns = true;
   } else {
-    // Other - default to "צח" or create new sheet
-    sheetName = data.supplier_name;
-    useSpecialColumns = false;
+    // Other - route to "שונות" sheet
+    sheetName = SHEET_NAMES.other;
+    useSpecialColumns = true;
   }
 
   let sheet = ss.getSheetByName(sheetName);
