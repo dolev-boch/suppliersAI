@@ -185,6 +185,7 @@ function getSheetInfo(data) {
 
 /**
  * Add data to the appropriate sheet - WITH DATE SORTING (oldest to newest)
+ * WITHOUT inserting rows (to preserve static מספר סידורי in column A)
  */
 function addDataToSheet(sheetInfo, data) {
   try {
@@ -213,7 +214,7 @@ function addDataToSheet(sheetInfo, data) {
 
     // Find the correct position to insert (sorted by date, oldest to newest)
     let targetRow = -1;
-    let shouldInsertNewRow = false;
+    let needsShift = false;
 
     for (let row = DATA_START_ROW; row <= sheet.getMaxRows(); row++) {
       const existingDateValue = sheet.getRange(row, columns.DATE).getValue();
@@ -221,7 +222,7 @@ function addDataToSheet(sheetInfo, data) {
       // If we hit an empty row, this is the end - just write here
       if (!existingDateValue || existingDateValue === '') {
         targetRow = row;
-        shouldInsertNewRow = false;
+        needsShift = false;
         Logger.log('📍 Found empty row at: ' + row + ' - appending here');
         break;
       }
@@ -232,7 +233,7 @@ function addDataToSheet(sheetInfo, data) {
       // If new date is older than existing date, insert before this row
       if (newDate < existingDate) {
         targetRow = row;
-        shouldInsertNewRow = true;
+        needsShift = true;
         Logger.log('📍 Found insertion point before row: ' + row + ' (new date ' + data.document_date + ' is older than existing ' + existingDate.toLocaleDateString('he-IL') + ')');
         break;
       }
@@ -248,14 +249,13 @@ function addDataToSheet(sheetInfo, data) {
           break;
         }
       }
-      shouldInsertNewRow = false;
+      needsShift = false;
       Logger.log('📍 No insertion point found, appending to end at row: ' + targetRow);
     }
 
-    // Insert a new row if we're inserting in the middle of existing data
-    if (shouldInsertNewRow) {
-      sheet.insertRowBefore(targetRow);
-      Logger.log('✅ Inserted new row at position: ' + targetRow);
+    // If we need to insert in the middle, shift existing data down
+    if (needsShift) {
+      shiftDataDown(sheet, targetRow, columns, useSpecialColumns);
     }
 
     Logger.log('Writing to sheet: ' + sheet.getName() + ', row: ' + targetRow + ' (date: ' + data.document_date + ')');
@@ -268,6 +268,58 @@ function addDataToSheet(sheetInfo, data) {
   } catch (error) {
     Logger.log('❌ Error adding data: ' + error.toString());
     return false;
+  }
+}
+
+/**
+ * Shift existing data down by one row (without inserting rows)
+ * This preserves the static מספר סידורי in column A
+ */
+function shiftDataDown(sheet, startRow, columns, useSpecialColumns) {
+  try {
+    Logger.log('📋 Shifting data down from row ' + startRow);
+
+    // Find the last row with data
+    let lastRow = startRow;
+    for (let row = startRow; row <= sheet.getMaxRows(); row++) {
+      const cellValue = sheet.getRange(row, columns.DATE).getValue();
+      if (!cellValue || cellValue === '') {
+        lastRow = row - 1;
+        break;
+      }
+    }
+
+    if (lastRow < startRow) {
+      Logger.log('No data to shift');
+      return;
+    }
+
+    Logger.log('Last row with data: ' + lastRow);
+
+    // Determine the range of columns to shift (B to G or B to H)
+    const startCol = 2; // Column B (skip column A with מספר סידורי)
+    const endCol = useSpecialColumns ? 8 : 7; // H or G
+    const numCols = endCol - startCol + 1;
+
+    // Read all data from startRow to lastRow (columns B to G/H)
+    const dataRange = sheet.getRange(startRow, startCol, lastRow - startRow + 1, numCols);
+    const dataValues = dataRange.getValues();
+    const dataFormats = dataRange.getNumberFormats();
+
+    Logger.log('Read ' + dataValues.length + ' rows of data');
+
+    // Write the data shifted down by one row
+    const targetRange = sheet.getRange(startRow + 1, startCol, dataValues.length, numCols);
+    targetRange.setValues(dataValues);
+    targetRange.setNumberFormats(dataFormats);
+
+    Logger.log('✅ Data shifted down successfully');
+
+    // Clear the original startRow (will be overwritten with new data)
+    sheet.getRange(startRow, startCol, 1, numCols).clearContent();
+  } catch (error) {
+    Logger.log('❌ Error shifting data: ' + error.toString());
+    throw error;
   }
 }
 
@@ -560,6 +612,7 @@ function testSetup() {
   Logger.log('- Amounts are correct (not showing "1" for "1,760")');
   Logger.log('- Dates are sorted oldest to newest');
   Logger.log('- No data was deleted or overwritten');
+  Logger.log('- Column A (מספר סידורי) still shows 1, 2, 3, 4... (static, not disturbed)');
 }
 
 /**
