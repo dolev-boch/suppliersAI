@@ -76,6 +76,17 @@ const SUPPLIERS = {
     priniv: 'פריניב',
     preyniv: 'פריניב',
 
+    // רשתות מזון (supermarkets) - English variations
+    victory: 'ויקטורי',
+    viktory: 'ויקטורי',
+    'rami levy': 'רמי לוי',
+    'rami levi': 'רמי לוי',
+    ramilevy: 'רמי לוי',
+    shufersol: 'שופרסל',
+    shufersal: 'שופרסל',
+    yohananof: 'יוחננוף',
+    yochananof: 'יוחננוף',
+
     // Add more as you discover them on invoices
   },
 

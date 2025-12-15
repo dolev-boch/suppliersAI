@@ -39,7 +39,7 @@ const SHEET_NAMES = {
   fuel_station: 'תחנת דלק',
   supermarket: 'רשתות מזון',
   nursery: 'משתלות',
-  other: 'צח', // Default fallback if supplier not found
+  other: 'שונות', // "Other" category suppliers go to שונות sheet
 };
 
 // Priority suppliers list - each has its own sheet

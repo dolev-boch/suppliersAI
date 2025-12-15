@@ -1,103 +1,87 @@
-// Gemini AI Integration with Retry Logic and Optimized Prompts
+// Gemini AI Integration with Request Queue and Optimized Prompts
 const GeminiService = {
   /**
-   * Analyze invoice image with Gemini AI (with retry logic)
+   * Analyze invoice image with Gemini AI (using request queue)
    */
   async analyzeInvoice(base64Image) {
-    const maxRetries = 3;
-    let lastError;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        console.log(`Gemini API attempt ${attempt}/${maxRetries}`);
-
-        const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
-
-        const requestBody = {
-          contents: [
-            {
-              parts: [
-                { text: this.buildPrompt() },
-                {
-                  inline_data: {
-                    mime_type: 'image/jpeg',
-                    data: base64Image,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: CONFIG.GENERATION_CONFIG,
-        };
-
-        const response = await fetch(apiUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          const errorMsg = errorData.error?.message || 'שגיאת API';
-
-          // Check if it's a rate limit error (429)
-          if (response.status === 429) {
-            lastError = new Error('Rate limit exceeded');
-
-            // Exponential backoff: wait longer with each retry
-            const waitTime = Math.min(1000 * Math.pow(2, attempt), 8000);
-            console.log(`Rate limited. Waiting ${waitTime}ms before retry...`);
-            await this.sleep(waitTime);
-            continue; // Retry
-          }
-
-          throw new Error(errorMsg);
-        }
-
-        const data = await response.json();
-        const usage = data.usageMetadata;
-        const text = data.candidates[0].content.parts[0].text;
-
-        console.log('Gemini Response:', text);
-        console.log('Token usage:', usage);
-
-        // Extract JSON from response
-        const jsonMatch = text.match(/\{[\s\S]*?\}/);
-        if (!jsonMatch) {
-          throw new Error('לא הצלחתי לפרק את תשובת ה-AI');
-        }
-
-        const parsed = JSON.parse(jsonMatch[0]);
-
-        // Validate and categorize the response
-        const validated = this.validateResponse(parsed);
-
-        return {
-          ...validated,
-          usage: usage,
-        };
-      } catch (error) {
-        lastError = error;
-
-        // If it's the last attempt or not a rate limit error, throw immediately
-        if (attempt === maxRetries || error.message !== 'Rate limit exceeded') {
-          console.error('Gemini API Error:', error);
-          throw error;
-        }
-      }
-    }
-
-    // If we got here, all retries failed
-    throw lastError;
+    // Use the request queue to serialize and throttle requests
+    return geminiQueue.enqueue(async () => {
+      return await this.performAnalysis(base64Image);
+    });
   },
 
   /**
-   * Sleep utility for retry delays
+   * Perform the actual API call (called by the queue)
    */
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  async performAnalysis(base64Image) {
+    try {
+      console.log('Gemini API request started');
+
+      const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+
+      const requestBody = {
+        contents: [
+          {
+            parts: [
+              { text: this.buildPrompt() },
+              {
+                inline_data: {
+                  mime_type: 'image/jpeg',
+                  data: base64Image,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: CONFIG.GENERATION_CONFIG,
+      };
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        const errorMsg = errorData.error?.message || 'שגיאת API';
+
+        // Throw error with status code for queue to handle retries
+        if (response.status === 429) {
+          throw new Error('429 Rate limit exceeded');
+        }
+
+        throw new Error(errorMsg);
+      }
+
+      const data = await response.json();
+      const usage = data.usageMetadata;
+      const text = data.candidates[0].content.parts[0].text;
+
+      console.log('Gemini Response:', text);
+      console.log('Token usage:', usage);
+
+      // Extract JSON from response
+      const jsonMatch = text.match(/\{[\s\S]*?\}/);
+      if (!jsonMatch) {
+        throw new Error('לא הצלחתי לפרק את תשובת ה-AI');
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Validate and categorize the response
+      const validated = this.validateResponse(parsed);
+
+      return {
+        ...validated,
+        usage: usage,
+      };
+    } catch (error) {
+      console.error('Gemini API Error:', error);
+      throw error;
+    }
   },
 
   /**
@@ -132,7 +116,10 @@ const GeminiService = {
 → supplier_category: "fuel_station"
 
 **רשתות מזון:** שופרסל, רמי לוי, ויקטורי, יוחננוף, אלונית, מחסני השוק, טרמינל 3, יינות ביתן, אושר עד, מגא, חצי חינם, קופיקס
-מילות זיהוי: סופר, supermarket, שוק, מרכול
+**חשוב מאוד:** חפש את השמות האלה בדיוק! לדוגמה:
+- "ויקטורי" / "Victory" → רשתות מזון (לא שונות!)
+- "רמי לוי" / "Rami Levy" → רשתות מזון (לא שונות!)
+מילות זיהוי: סופר, supermarket, שוק, מרכול, market
 → supplier_category: "supermarket"
 
 **משתלות:** מילות זיהוי: משתלה, גננות, צמחים, nursery, גינון
@@ -149,8 +136,11 @@ const GeminiService = {
 
 **סכום:** הסכום הכולל הסופי בשקלים.
 
-**כרטיס אשראי:** רק עבור תחנת דלק, רשתות מזון, משתלות, או שונות.
-חפש 4 ספרות אחרונות של כרטיס אשראי בחשבונית. אם לא קיים או ספק priority → null
+**כרטיס אשראי:**
+- **חובה לבדוק** רק עבור: תחנת דלק (fuel_station), רשתות מזון (supermarket), משתלות (nursery), שונות (other)
+- חפש 4 ספרות אחרונות של כרטיס אשראי בחשבונית
+- אם לא מצאת 4 ספרות → credit_card_last4: null
+- אם ספק priority → **תמיד** credit_card_last4: null (גם אם יש מספר כרטיס בחשבונית!)
 
 ## JSON:
 {

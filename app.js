@@ -571,7 +571,12 @@ class InvoiceScanner {
   openSupplierModal() {
     this.elements.supplierModal.style.display = 'flex';
     this.elements.supplierSearch.value = '';
-    this.elements.customSupplierName.value = '';
+
+    // Pre-populate custom supplier field with AI-detected name
+    // This helps when AI detected a supplier but mislabeled the category
+    const currentSupplierName = this.currentResult?.supplier_name || '';
+    this.elements.customSupplierName.value = currentSupplierName;
+
     this.elements.customSupplierSection.style.display = 'block';
     this.populateSupplierList();
     this.elements.supplierSearch.focus();
