@@ -184,7 +184,7 @@ function getSheetInfo(data) {
 }
 
 /**
- * Add data to the appropriate sheet - WITH FIXED DATE HANDLING
+ * Add data to the appropriate sheet - WITH DATE SORTING (oldest to newest)
  */
 function addDataToSheet(sheetInfo, data) {
   try {
@@ -192,90 +192,66 @@ function addDataToSheet(sheetInfo, data) {
     const useSpecialColumns = sheetInfo.useSpecialColumns;
     const columns = useSpecialColumns ? SPECIAL_COLUMNS : REGULAR_COLUMNS;
 
-    // Find the next empty row starting from row 5
-    let targetRow = DATA_START_ROW;
-    let foundEmptyRow = false;
+    // Parse the incoming date
+    const newDate = parseIsraeliDate(data.document_date);
 
-    // Check rows starting from row 5 until we find an empty one
+    if (!newDate) {
+      Logger.log('⚠️ Could not parse date, appending to end');
+      // If date cannot be parsed, append to the end
+      let targetRow = DATA_START_ROW;
+      for (let row = DATA_START_ROW; row <= sheet.getMaxRows(); row++) {
+        const cellValue = sheet.getRange(row, columns.DATE).getValue();
+        if (!cellValue || cellValue === '') {
+          targetRow = row;
+          break;
+        }
+      }
+      Logger.log('Writing to sheet: ' + sheet.getName() + ', row: ' + targetRow);
+      writeRowData(sheet, targetRow, columns, data, useSpecialColumns);
+      return true;
+    }
+
+    // Find the correct position to insert (sorted by date, oldest to newest)
+    let targetRow = DATA_START_ROW;
+    let insertPosition = -1;
+
     for (let row = DATA_START_ROW; row <= sheet.getMaxRows(); row++) {
-      const cellValue = sheet.getRange(row, columns.DATE).getValue();
-      if (!cellValue || cellValue === '') {
+      const existingDateValue = sheet.getRange(row, columns.DATE).getValue();
+
+      // If we hit an empty row, insert here
+      if (!existingDateValue || existingDateValue === '') {
         targetRow = row;
-        foundEmptyRow = true;
+        insertPosition = row;
+        Logger.log('📍 Found empty row at: ' + row);
+        break;
+      }
+
+      // Compare dates
+      const existingDate = new Date(existingDateValue);
+
+      // If new date is older than existing date, insert before this row
+      if (newDate < existingDate) {
+        targetRow = row;
+        insertPosition = row;
+        Logger.log('📍 Found insertion point before row: ' + row + ' (new date is older)');
         break;
       }
     }
 
-    // If no empty row found, we've reached the end - should not happen normally
-    if (!foundEmptyRow) {
-      Logger.log('Warning: No empty row found, data might overlap');
-    }
-
-    Logger.log('Writing to sheet: ' + sheet.getName() + ', row: ' + targetRow);
-
-    // Prepare the data based on document type
-    const isDeliveryNote = data.document_type === 'delivery_note';
-    const isInvoice = data.document_type === 'invoice';
-
-    // ⭐ B - תאריך אספקה (Document Date) - FIXED DATE HANDLING
-    if (data.document_date) {
-      // Convert DD/MM/YYYY string to proper Date object
-      const dateObj = parseIsraeliDate(data.document_date);
-      if (dateObj) {
-        sheet.getRange(targetRow, columns.DATE).setValue(dateObj);
-        // Set number format to DD/MM/YYYY
-        sheet.getRange(targetRow, columns.DATE).setNumberFormat('dd/mm/yyyy');
-        Logger.log('✅ Date set successfully: ' + data.document_date + ' -> ' + dateObj.toString());
-      } else {
-        // Fallback: write as string if parsing fails
-        sheet.getRange(targetRow, columns.DATE).setValue(data.document_date);
-        Logger.log('⚠️ Date parsing failed, using string: ' + data.document_date);
+    // If we need to insert in the middle (not at the end), insert a new row
+    if (insertPosition > DATA_START_ROW && insertPosition < sheet.getMaxRows()) {
+      const nextRowValue = sheet.getRange(insertPosition, columns.DATE).getValue();
+      if (nextRowValue && nextRowValue !== '') {
+        // There's data at this position, insert a new row
+        sheet.insertRowBefore(insertPosition);
+        Logger.log('✅ Inserted new row at position: ' + insertPosition);
       }
     }
 
-    // C - מס' תעודת משלוח (Delivery Note Number)
-    if (isDeliveryNote && data.document_number) {
-      sheet.getRange(targetRow, columns.DELIVERY_NUM).setValue(data.document_number);
-    }
+    Logger.log('Writing to sheet: ' + sheet.getName() + ', row: ' + targetRow + ' (date: ' + data.document_date + ')');
 
-    // D - סכום תעודת משלוח (Delivery Note Amount)
-    if (isDeliveryNote && data.total_amount) {
-      sheet.getRange(targetRow, columns.DELIVERY_SUM).setValue(parseFloat(data.total_amount));
-    }
-
-    // E - מס' חשבונית מס (Invoice Number)
-    if (isInvoice && data.document_number) {
-      sheet.getRange(targetRow, columns.INVOICE_NUM).setValue(data.document_number);
-    }
-
-    // F - סכום חשבונית מס (Invoice Amount)
-    if (isInvoice && data.total_amount) {
-      sheet.getRange(targetRow, columns.INVOICE_SUM).setValue(parseFloat(data.total_amount));
-    }
-
-    // G - הערות (Notes)
-    let notes = '';
-    if (useSpecialColumns) {
-      // For special categories, add supplier name to notes
-      notes = data.supplier_name || '';
-      if (data.notes) {
-        notes += (notes ? ' | ' : '') + data.notes;
-      }
-    } else {
-      // For regular suppliers, just add notes if any
-      notes = data.notes || '';
-    }
-    if (notes) {
-      sheet.getRange(targetRow, columns.NOTES).setValue(notes);
-    }
-
-    // H - מס' כרטיס אשראי 4 ספרות (Credit Card - only for special categories)
-    if (useSpecialColumns && data.credit_card_last4) {
-      sheet.getRange(targetRow, columns.CREDIT_CARD).setValue('****' + data.credit_card_last4);
-    }
-
-    // Apply formatting
-    formatDataRow(sheet, targetRow, useSpecialColumns);
+    // Write the data to the target row
+    writeRowData(sheet, targetRow, columns, data, useSpecialColumns);
 
     Logger.log('✅ Data written successfully to row ' + targetRow);
     return true;
@@ -283,6 +259,75 @@ function addDataToSheet(sheetInfo, data) {
     Logger.log('❌ Error adding data: ' + error.toString());
     return false;
   }
+}
+
+/**
+ * Helper function to write data to a specific row
+ */
+function writeRowData(sheet, targetRow, columns, data, useSpecialColumns) {
+  // Prepare the data based on document type
+  const isDeliveryNote = data.document_type === 'delivery_note';
+  const isInvoice = data.document_type === 'invoice';
+
+  // ⭐ B - תאריך אספקה (Document Date) - FIXED DATE HANDLING
+  if (data.document_date) {
+    // Convert DD/MM/YYYY string to proper Date object
+    const dateObj = parseIsraeliDate(data.document_date);
+    if (dateObj) {
+      sheet.getRange(targetRow, columns.DATE).setValue(dateObj);
+      // Set number format to DD/MM/YYYY
+      sheet.getRange(targetRow, columns.DATE).setNumberFormat('dd/mm/yyyy');
+      Logger.log('✅ Date set successfully: ' + data.document_date + ' -> ' + dateObj.toString());
+    } else {
+      // Fallback: write as string if parsing fails
+      sheet.getRange(targetRow, columns.DATE).setValue(data.document_date);
+      Logger.log('⚠️ Date parsing failed, using string: ' + data.document_date);
+    }
+  }
+
+  // C - מס' תעודת משלוח (Delivery Note Number)
+  if (isDeliveryNote && data.document_number) {
+    sheet.getRange(targetRow, columns.DELIVERY_NUM).setValue(data.document_number);
+  }
+
+  // D - סכום תעודת משלוח (Delivery Note Amount)
+  if (isDeliveryNote && data.total_amount) {
+    sheet.getRange(targetRow, columns.DELIVERY_SUM).setValue(parseFloat(data.total_amount));
+  }
+
+  // E - מס' חשבונית מס (Invoice Number)
+  if (isInvoice && data.document_number) {
+    sheet.getRange(targetRow, columns.INVOICE_NUM).setValue(data.document_number);
+  }
+
+  // F - סכום חשבונית מס (Invoice Amount)
+  if (isInvoice && data.total_amount) {
+    sheet.getRange(targetRow, columns.INVOICE_SUM).setValue(parseFloat(data.total_amount));
+  }
+
+  // G - הערות (Notes)
+  let notes = '';
+  if (useSpecialColumns) {
+    // For special categories, add supplier name to notes
+    notes = data.supplier_name || '';
+    if (data.notes) {
+      notes += (notes ? ' | ' : '') + data.notes;
+    }
+  } else {
+    // For regular suppliers, just add notes if any
+    notes = data.notes || '';
+  }
+  if (notes) {
+    sheet.getRange(targetRow, columns.NOTES).setValue(notes);
+  }
+
+  // H - מס' כרטיס אשראי 4 ספרות (Credit Card - only for special categories)
+  if (useSpecialColumns && data.credit_card_last4) {
+    sheet.getRange(targetRow, columns.CREDIT_CARD).setValue('****' + data.credit_card_last4);
+  }
+
+  // Apply formatting
+  formatDataRow(sheet, targetRow, useSpecialColumns);
 }
 
 /**
