@@ -328,6 +328,7 @@ button {
 .status-message {
   padding: var(--spacing-md);
   border-radius: var(--radius-md);
+  margin-top: var(--spacing-lg);
   margin-bottom: var(--spacing-lg);
   font-size: 14px;
   font-weight: 500;

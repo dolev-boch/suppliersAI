@@ -24,7 +24,7 @@ const CONFIG = {
   // Google Sheets Configuration
   SHEETS_CONFIG: {
     scriptUrl:
-      'https://script.google.com/macros/s/AKfycbzW6wqRagaN_uYPJuMWK0bYrkD9cmmdxVp_Ve29jYbyowKk4U258FdtVfl5BzTBJ1KsYg/exec', // Add your Google Apps Script deployment URL here
+      'https://script.google.com/macros/s/AKfycbyB9QcLiTErd5PyVcneX7OibT2Olps2Y_FvTVQt7KiQBxETQs2tLXeLeS0WnQNEFFDRHQ/exec', // Add your Google Apps Script deployment URL here
     sheetId: '1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM',
   },
 

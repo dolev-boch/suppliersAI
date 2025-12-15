@@ -305,23 +305,21 @@ function shiftDataDown(sheet, startRow, columns, useSpecialColumns) {
     // CRITICAL FIX: Shift data from BOTTOM to TOP to avoid overwriting
     // Start from the last row and move backwards
     for (let row = lastRow; row >= startRow; row--) {
-      // Read one row
+      // Read ALL data from this row (columns B to endCol)
       const sourceRange = sheet.getRange(row, startCol, 1, numCols);
-      const rowValues = sourceRange.getValues();
-      const rowFormats = sourceRange.getNumberFormats();
 
-      // Write it one row down
+      // Copy the entire range to one row down using copyTo
+      // This preserves ALL data, formulas, formats, etc.
       const targetRange = sheet.getRange(row + 1, startCol, 1, numCols);
-      targetRange.setValues(rowValues);
-      targetRange.setNumberFormats(rowFormats);
+      sourceRange.copyTo(targetRange);
 
-      Logger.log('Shifted row ' + row + ' to row ' + (row + 1));
+      Logger.log('Shifted row ' + row + ' to row ' + (row + 1) + ' (columns ' + startCol + ' to ' + endCol + ')');
     }
 
     Logger.log('✅ Data shifted down successfully (' + (lastRow - startRow + 1) + ' rows)');
 
     // Clear the original startRow (will be overwritten with new data)
-    sheet.getRange(startRow, startCol, 1, numCols).clearContent();
+    sheet.getRange(startRow, startCol, 1, numCols).clear();
   } catch (error) {
     Logger.log('❌ Error shifting data: ' + error.toString());
     throw error;

@@ -737,19 +737,15 @@ class InvoiceScanner {
   }
 
   /**
-   * Show status message
+   * Show status message (permanent, user controls visibility)
    */
   showStatus(message, type = 'info') {
     this.elements.statusMessage.textContent = message;
     this.elements.statusMessage.className = `status-message ${type}`;
     this.elements.statusMessage.style.display = 'block';
 
-    // Auto-hide success messages after 5 seconds
-    if (type === 'success' || type === 'info') {
-      setTimeout(() => {
-        this.elements.statusMessage.style.display = 'none';
-      }, 5000);
-    }
+    // Success messages are permanent (no auto-hide)
+    // User can start a new scan to clear them
   }
 
   /**
