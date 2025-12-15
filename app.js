@@ -937,6 +937,47 @@ class InvoiceScanner {
   }
 
   /**
+   * Send data to Google Sheets with automatic retry
+   * @param {Object} data - Data to send
+   * @param {number} maxRetries - Maximum number of retry attempts (default: 3)
+   */
+  async sendToSheetsWithRetry(data, maxRetries = 3) {
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Attempt ${attempt}/${maxRetries}: Sending to Google Sheets`);
+
+        await fetch(CONFIG.SHEETS_CONFIG.scriptUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(data),
+        });
+
+        // If fetch succeeds, return immediately
+        console.log(`✅ Successfully sent to Google Sheets on attempt ${attempt}`);
+        return;
+      } catch (error) {
+        lastError = error;
+        console.error(`❌ Attempt ${attempt}/${maxRetries} failed:`, error);
+
+        // If this wasn't the last attempt, wait before retrying
+        if (attempt < maxRetries) {
+          const delay = 1000 * attempt; // Exponential backoff: 1s, 2s, 3s
+          console.log(`Waiting ${delay}ms before retry...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    // If all retries failed, throw the last error
+    throw new Error(`Failed to send to Google Sheets after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
+  }
+
+  /**
    * Send bulk data to Google Sheets
    */
   async sendBulkDataToSheets(result) {
@@ -957,14 +998,8 @@ class InvoiceScanner {
 
     console.log('Sending bulk data to Google Sheets:', dataToSend);
 
-    await fetch(CONFIG.SHEETS_CONFIG.scriptUrl, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(dataToSend),
-    });
+    // Use retry mechanism
+    await this.sendToSheetsWithRetry(dataToSend, 3);
 
     // Small delay to avoid rate limiting
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -1064,18 +1099,9 @@ class InvoiceScanner {
 
       console.log('Sending to Google Sheets:', dataToSend);
 
-      // Send to Google Sheets via Apps Script
-      const response = await fetch(CONFIG.SHEETS_CONFIG.scriptUrl, {
-        method: 'POST',
-        mode: 'no-cors', // Required for Google Apps Script
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(dataToSend),
-      });
+      // Send to Google Sheets via Apps Script with retry logic
+      await this.sendToSheetsWithRetry(dataToSend);
 
-      // Note: With no-cors mode, we can't read the response
-      // but we can assume success if no error was thrown
       this.showStatus('הנתונים נשלחו בהצלחה ל-Google Sheets!', 'success');
 
       // Exit edit mode if active
