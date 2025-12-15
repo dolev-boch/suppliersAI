@@ -136,10 +136,12 @@ const GeminiService = {
 
 **סכום:** הסכום הכולל הסופי בשקלים.
 
-**כרטיס אשראי:**
-- **חובה לבדוק** רק עבור: תחנת דלק (fuel_station), רשתות מזון (supermarket), משתלות (nursery), שונות (other)
-- חפש 4 ספרות אחרונות של כרטיס אשראי בחשבונית
-- אם לא מצאת 4 ספרות → credit_card_last4: null
+**כרטיס אשראי (קריטי!):**
+- **חובה לבדוק ולמצוא** עבור: תחנת דלק (fuel_station), רשתות מזון (supermarket), משתלות (nursery), שונות (other)
+- חפש בקפידה 4 ספרות אחרונות של כרטיס אשראי בכל החשבונית
+- חפש ליד: "אשראי", "כרטיס", "credit", "card", "מספר כרטיס", "****" (4 כוכביות)
+- הספרות יכולות להיות: "****1234", "XXXX1234", "1234" לבד, או "כרטיס 1234"
+- אם לא מצאת 4 ספרות למרות חיפוש קפדני → credit_card_last4: null
 - אם ספק priority → **תמיד** credit_card_last4: null (גם אם יש מספר כרטיס בחשבונית!)
 
 ## JSON:
@@ -158,13 +160,16 @@ const GeminiService = {
   "credit_card_confidence": 90
 }
 
-**חשוב:** עבור supplier_category: "priority" → תמיד credit_card_last4: null
+**חשוב מאוד:**
+- עבור supplier_category: "priority" → תמיד credit_card_last4: null
+- עבור fuel_station, supermarket, nursery, other → **חפש בקפידה** את ה-4 ספרות של כרטיס האשראי!
 
 כללים:
 - אסור להמציא מידע
 - עקוב באלגוריתם הזיהוי בדיוק
 - confidence גבוה (90+) רק למידע ברור
 - document_type: "invoice" לחשבונית מס, "delivery_note" לתעודת משלוח
+- כרטיס אשראי: חפש בכל החשבונית, אל תפספס!
 
 נתח עכשיו:`;
   },
