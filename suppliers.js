@@ -130,7 +130,7 @@ const SUPPLIERS = {
     nurseries: {
       categoryName: 'משתלות',
       suppliers: [],
-      keywords: ['משתלה', 'משתלת', 'גננות', 'צמחים', 'nursery', 'גינון', 'עציצים'],
+      keywords: ['משתלה', 'משתלת', 'גננות', 'צמחים', 'nursery', 'גינון', 'עציצים', 'מוצרי נוי', 'נוי', 'פרחים', 'צמח', 'garden'],
     },
   },
 

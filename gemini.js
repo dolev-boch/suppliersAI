@@ -122,7 +122,7 @@ const GeminiService = {
 מילות זיהוי: סופר, supermarket, שוק, מרכול, market
 → supplier_category: "supermarket"
 
-**משתלות:** מילות זיהוי: משתלה, גננות, צמחים, nursery, גינון
+**משתלות:** מילות זיהוי: משתלה, גננות, צמחים, nursery, גינון, מוצרי נוי, נוי, פרחים, עציצים, צמח, garden
 → supplier_category: "nursery"
 
 ### 3. שונות (אם שום קטגוריה לא התאימה):
