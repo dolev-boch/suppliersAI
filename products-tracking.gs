@@ -74,32 +74,61 @@ const SUPPLIER_SHEETS = [
  */
 function doPost(e) {
   try {
-    Logger.log('Received POST request for product tracking');
+    Logger.log('📨 Received POST request for product tracking');
+    Logger.log('📦 Raw postData: ' + (e.postData ? e.postData.contents : 'NO POST DATA'));
+
+    if (!e.postData || !e.postData.contents) {
+      Logger.log('❌ No post data received!');
+      return ContentService.createTextOutput(
+        JSON.stringify({ success: false, error: 'No post data received' })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
 
     const data = JSON.parse(e.postData.contents);
-    Logger.log('Parsed data: ' + JSON.stringify(data));
+    Logger.log('✅ Parsed data successfully');
+    Logger.log('   Supplier: ' + (data.supplier_name || 'MISSING'));
+    Logger.log('   Products count: ' + (data.products ? data.products.length : 0));
 
     // Process products
     if (data.products && data.products.length > 0) {
+      Logger.log('🚀 Processing ' + data.products.length + ' products...');
       processProducts(data);
+      Logger.log('✅ Products processed successfully!');
       return ContentService.createTextOutput(
         JSON.stringify({ success: true, message: 'Products processed successfully' })
       ).setMimeType(ContentService.MimeType.JSON);
     } else {
-      Logger.log('No products in request');
+      Logger.log('⚠️ No products in request');
       return ContentService.createTextOutput(
         JSON.stringify({ success: true, message: 'No products to process' })
       ).setMimeType(ContentService.MimeType.JSON);
     }
 
   } catch (error) {
-    Logger.log('ERROR in doPost: ' + error.toString());
-    Logger.log('Stack: ' + error.stack);
+    Logger.log('❌ ERROR in doPost: ' + error.toString());
+    Logger.log('   Stack: ' + error.stack);
+    if (e && e.postData) {
+      Logger.log('   Raw data: ' + e.postData.contents);
+    }
 
     return ContentService.createTextOutput(
       JSON.stringify({ success: false, error: error.toString() })
     ).setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+/**
+ * Handle GET requests (for testing/verification)
+ */
+function doGet(e) {
+  Logger.log('📭 Received GET request - this endpoint requires POST');
+  return ContentService.createTextOutput(
+    JSON.stringify({
+      success: false,
+      message: 'Product Tracking API - This endpoint requires POST requests with product data',
+      note: 'If you see this, the deployment is working. Use POST to submit products.'
+    })
+  ).setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
