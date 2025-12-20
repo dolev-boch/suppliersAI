@@ -100,6 +100,11 @@ function doPost(e) {
     // Add data to sheet
     const success = addDataToSheet(sheetInfo, data);
 
+    // Send products to product tracking spreadsheet (if products exist and supplier is not שונות)
+    if (data.products && data.products.length > 0 && data.supplier_category !== 'other') {
+      sendProductsToTracking(data);
+    }
+
     if (success) {
       return createResponse(true, 'Data added successfully to ' + sheetInfo.sheet.getName());
     } else {
@@ -648,4 +653,57 @@ function clearTestData() {
   });
 
   Logger.log('Test data cleared from all sheets');
+}
+
+// ============================================================================
+// PRODUCT TRACKING INTEGRATION
+// ============================================================================
+
+/**
+ * Send products to product tracking spreadsheet
+ * This is called automatically when invoice data contains products
+ * Products are excluded for 'שונות' (other) category
+ */
+function sendProductsToTracking(data) {
+  try {
+    Logger.log('📦 Sending products to tracking spreadsheet...');
+
+    // Product tracking Apps Script URL
+    // You need to deploy the products-tracking.gs script and paste the URL here
+    const PRODUCTS_SCRIPT_URL = 'PASTE_DEPLOYED_PRODUCTS_SCRIPT_URL_HERE';
+
+    if (PRODUCTS_SCRIPT_URL === 'PASTE_DEPLOYED_PRODUCTS_SCRIPT_URL_HERE') {
+      Logger.log('⚠️ Products script URL not configured. Skipping product tracking.');
+      return;
+    }
+
+    const payload = {
+      supplier_name: data.supplier_name,
+      document_date: data.document_date,
+      products: data.products || []
+    };
+
+    Logger.log(`Sending ${payload.products.length} products for ${data.supplier_name}`);
+
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+
+    const response = UrlFetchApp.fetch(PRODUCTS_SCRIPT_URL, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+
+    if (responseCode === 200) {
+      Logger.log('✅ Products sent successfully to tracking spreadsheet');
+    } else {
+      Logger.log(`⚠️ Products tracking response: ${responseCode} - ${responseText}`);
+    }
+
+  } catch (error) {
+    Logger.log('❌ Error sending products to tracking: ' + error.toString());
+    // Don't fail the main invoice processing if product tracking fails
+  }
 }
