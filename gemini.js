@@ -63,13 +63,20 @@ const GeminiService = {
       console.log('Gemini Response:', text);
       console.log('Token usage:', usage);
 
-      // Extract JSON from response
-      const jsonMatch = text.match(/\{[\s\S]*?\}/);
+      // Extract JSON from response (handle nested objects and arrays)
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         throw new Error('לא הצלחתי לפרק את תשובת ה-AI');
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonMatch[0]);
+      } catch (jsonError) {
+        console.error('Invalid JSON from AI:', jsonMatch[0]);
+        console.error('JSON Parse Error:', jsonError.message);
+        throw new Error(`AI returned invalid JSON: ${jsonError.message}`);
+      }
 
       // Validate and categorize the response
       const validated = this.validateResponse(parsed);
@@ -222,6 +229,13 @@ const GeminiService = {
 - confidence גבוה (90+) רק למידע ברור
 - document_type: "invoice" לחשבונית מס, "delivery_note" לתעודת משלוח
 - כרטיס אשראי: חפש בכל החשבונית, אל תפספס!
+
+**חשוב! תבנית JSON:**
+- החזר **רק** JSON תקין, ללא טקסט נוסף
+- כל מוצר במערך products חייב להיות אובייקט תקין עם כל השדות
+- אם אין מוצרים, החזר "products": []
+- ודא שיש פסיק אחרי כל אובייקט מוצר (חוץ מהאחרון)
+- ודא שכל מחרוזות בתוך גרשיים כפולים
 
 נתח עכשיו:`;
   },
