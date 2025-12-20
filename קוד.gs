@@ -97,11 +97,19 @@ function doPost(e) {
       return createResponse(false, 'Sheet not found for supplier: ' + data.supplier_name);
     }
 
+    // Determine actual category from sheet name (not from AI which might be wrong)
+    let actualCategory = data.supplier_category;
+    const sheetName = sheetInfo.sheet.getName();
+
+    // Check if this is actually שונות sheet
+    const isOtherCategory = (sheetName === SHEET_NAMES.other);
+
     // Add data to sheet
     const success = addDataToSheet(sheetInfo, data);
 
-    // Send products to product tracking spreadsheet (if products exist and supplier is not שונות)
-    if (data.products && data.products.length > 0 && data.supplier_category !== 'other') {
+    // Send products to product tracking spreadsheet
+    // Exclude only if sheet is actually שונות (other)
+    if (data.products && data.products.length > 0 && !isOtherCategory) {
       sendProductsToTracking(data);
     }
 
