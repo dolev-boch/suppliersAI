@@ -669,10 +669,10 @@ function sendProductsToTracking(data) {
     Logger.log('📦 Sending products to tracking spreadsheet...');
 
     // Product tracking Apps Script URL
-    // You need to deploy the products-tracking.gs script and paste the URL here
-    const PRODUCTS_SCRIPT_URL = 'PASTE_DEPLOYED_PRODUCTS_SCRIPT_URL_HERE';
+    // Deploy the products-tracking.gs script and paste the URL here
+    const PRODUCTS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwnaOxuk0duFq3F52lxyjgX5CEVweLL68s1HagzFs0q0LqtXnBoWSOqJfJ5Mpu8TXRF/exec';
 
-    if (PRODUCTS_SCRIPT_URL === 'PASTE_DEPLOYED_PRODUCTS_SCRIPT_URL_HERE') {
+    if (!PRODUCTS_SCRIPT_URL || PRODUCTS_SCRIPT_URL === '' || PRODUCTS_SCRIPT_URL === 'PASTE_DEPLOYED_PRODUCTS_SCRIPT_URL_HERE') {
       Logger.log('⚠️ Products script URL not configured. Skipping product tracking.');
       return;
     }
