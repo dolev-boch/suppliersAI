@@ -356,11 +356,22 @@ class InvoiceScanner {
     this.setConfidenceBadge(this.elements.documentConfidence, result.document_number_confidence);
 
     // Document type
+    const isCreditInvoice = result.document_type === 'credit_invoice';
     const isInvoice = result.document_type === 'invoice';
-    this.elements.documentType.textContent = isInvoice ? 'חשבונית מס' : 'תעודת משלוח';
-    this.elements.documentType.className = `document-type-badge ${
-      isInvoice ? 'invoice' : 'delivery'
-    }`;
+
+    let documentTypeText = 'תעודת משלוח';
+    let documentTypeClass = 'delivery';
+
+    if (isCreditInvoice) {
+      documentTypeText = 'חשבונית זיכוי';
+      documentTypeClass = 'credit-invoice';
+    } else if (isInvoice) {
+      documentTypeText = 'חשבונית מס';
+      documentTypeClass = 'invoice';
+    }
+
+    this.elements.documentType.textContent = documentTypeText;
+    this.elements.documentType.className = `document-type-badge ${documentTypeClass}`;
 
     // Date
     this.elements.dateValue.textContent = result.document_date || 'לא זוהה';

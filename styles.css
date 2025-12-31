@@ -525,6 +525,12 @@ button {
   color: var(--brown);
 }
 
+.document-type-badge.credit-invoice {
+  background: #fee2e2;
+  color: #dc2626;
+  font-weight: 600;
+}
+
 /* Edit Mode */
 .result-card.editable {
   cursor: pointer;

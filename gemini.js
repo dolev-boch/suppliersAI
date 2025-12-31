@@ -108,6 +108,13 @@ const GeminiService = {
             throw new Error(`AI returned invalid JSON: ${jsonError.message}`);
           }
 
+          // Log what AI detected for debugging
+          console.log('🔍 AI detected document_type:', parsed.document_type);
+          console.log('🔍 AI detected total_amount:', parsed.total_amount);
+          if (parsed.document_type === 'credit_invoice') {
+            console.log('💳 Credit invoice detected by AI!');
+          }
+
           // Validate and categorize the response
           const validated = this.validateResponse(parsed);
 
@@ -164,6 +171,23 @@ const GeminiService = {
     const prioritySuppliers = SUPPLIERS.priority.join('", "');
 
     return `אתה מומחה לזיהוי חשבוניות בעברית. חלץ מידע מדויק ותן JSON בלבד.
+
+## 🚨 בדיקה ראשונה - חשבונית זיכוי (CREDIT INVOICE) 🚨
+
+**לפני הכל, בדוק האם זו חשבונית זיכוי!**
+
+חפש את המילה **"זיכוי"** בכל מקום בחשבונית:
+- "חשבונית זיכוי"
+- "חשבונית מס זיכוי"
+- "זיכוי"
+- "מס זיכוי"
+- "Credit Note"
+- "Credit Invoice"
+
+**אם מצאת "זיכוי" בכותרת או ליד "חשבונית" → זו חשבונית זיכוי!**
+→ document_type: "credit_invoice"
+→ הסכום **חייב** להיות שלילי (עם מינוס -)
+→ הערות: "חשבונית זיכוי"
 
 ## סדר זיהוי ספק (בדוק בסדר זה):
 
