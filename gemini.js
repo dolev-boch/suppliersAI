@@ -235,6 +235,7 @@ const GeminiService = {
 - "MECKANO" או "Mecano" → מקאנו (priority)
 - "Netafim" או "נטפים" → נטפים (priority)
 - "Poliva Ltd." → פוליבה (priority)
+- "Mr Cake" או "Mr. Cake" → מר קייק (priority)
 
 ### 2. קטגוריות מיוחדות (רק אם לא priority):
 

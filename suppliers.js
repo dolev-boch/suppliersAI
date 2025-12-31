@@ -76,6 +76,13 @@ const SUPPLIERS = {
     priniv: 'פריניב',
     preyniv: 'פריניב',
 
+    // מר קייק variations
+    'mr cake': 'מר קייק',
+    'mr. cake': 'מר קייק',
+    'mr.cake': 'מר קייק',
+    mrcake: 'מר קייק',
+
+    // רשתות מזון (supermarkets) - English variations
     // רשתות מזון (supermarkets) - English variations
     victory: 'ויקטורי',
     viktory: 'ויקטורי',
@@ -131,7 +138,20 @@ const SUPPLIERS = {
     nurseries: {
       categoryName: 'משתלות',
       suppliers: [],
-      keywords: ['משתלה', 'משתלת', 'גננות', 'צמחים', 'nursery', 'גינון', 'עציצים', 'מוצרי נוי', 'נוי', 'פרחים', 'צמח', 'garden'],
+      keywords: [
+        'משתלה',
+        'משתלת',
+        'גננות',
+        'צמחים',
+        'nursery',
+        'גינון',
+        'עציצים',
+        'מוצרי נוי',
+        'נוי',
+        'פרחים',
+        'צמח',
+        'garden',
+      ],
     },
   },
 
