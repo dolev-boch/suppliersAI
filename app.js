@@ -1011,6 +1011,46 @@ class InvoiceScanner {
   }
 
   /**
+   * Send products data to products tracking sheet
+   * @param {Object} result - Invoice result with products array
+   */
+  async sendProductsToSheet(result) {
+    if (!CONFIG.SHEETS_CONFIG.productsScriptUrl) {
+      console.warn('⚠️ Products script URL not configured - skipping product tracking');
+      return;
+    }
+
+    if (!result.products || result.products.length === 0) {
+      console.log('ℹ️ No products to send');
+      return;
+    }
+
+    const productsData = {
+      supplier_name: result.supplier_name,
+      document_date: result.document_date,
+      products: result.products, // Array of products with prices
+    };
+
+    console.log(`📦 Sending ${result.products.length} products to tracking sheet:`, productsData);
+
+    try {
+      await fetch(CONFIG.SHEETS_CONFIG.productsScriptUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(productsData),
+      });
+
+      console.log(`✅ Products sent successfully to tracking sheet`);
+    } catch (error) {
+      console.error('❌ Error sending products to tracking sheet:', error);
+      // Don't throw - we don't want to fail the entire submission if products fail
+    }
+  }
+
+  /**
    * Send bulk data to Google Sheets
    */
   async sendBulkDataToSheets(result) {
@@ -1134,6 +1174,11 @@ class InvoiceScanner {
 
       // Send to Google Sheets via Apps Script with retry logic
       await this.sendToSheetsWithRetry(dataToSend);
+
+      // Send products to products tracking sheet
+      if (this.currentResult.products && this.currentResult.products.length > 0) {
+        await this.sendProductsToSheet(this.currentResult);
+      }
 
       this.showStatus('הנתונים נשלחו בהצלחה ל-Google Sheets! 🎉', 'success');
 
