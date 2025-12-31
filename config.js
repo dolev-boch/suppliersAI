@@ -26,6 +26,11 @@ const CONFIG = {
     scriptUrl:
       'https://script.google.com/macros/s/AKfycbxpvbYdgoLSkRhCKKgGP_aWpviXW6L8mb1OdoQNQa02LjSPMlWRz8Ab6B7XIOdvHebc_Q/exec', // Invoice summaries script URL
     sheetId: '1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM', // Invoice summaries spreadsheet
+
+    // ✅ ADD THIS - Products tracking script URL
+    // You MUST deploy products-tracking.gs as a web app and paste the URL here
+    productsScriptUrl:
+      'https://script.google.com/macros/s/AKfycbyCc6WjeypUS_Vz-8_FqUJfIb8vVE-ZwBMwjcsy9Bl9H5Cuawyu0uCBRPwICWoymMLP/exec', // ← DEPLOY products-tracking.gs AND PASTE URL HERE
     productsSheetId: '1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ', // Product tracking spreadsheet
   },
 
