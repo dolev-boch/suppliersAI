@@ -11,84 +11,138 @@ const GeminiService = {
   },
 
   /**
-   * Perform the actual API call (called by the queue)
+   * Perform the actual API call with timeout and retry (called by the queue)
    */
   async performAnalysis(base64Image) {
-    try {
-      console.log('Gemini API request started');
+    const MAX_RETRIES = 3;
+    const TIMEOUT_MS = 30000; // 30 seconds
+    const RETRY_DELAYS = [1000, 3000, 5000]; // 1s, 3s, 5s
 
-      const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    let lastError = null;
 
-      const requestBody = {
-        contents: [
-          {
-            parts: [
-              { text: this.buildPrompt() },
-              {
-                inline_data: {
-                  mime_type: 'image/jpeg',
-                  data: base64Image,
-                },
-              },
-            ],
-          },
-        ],
-        generationConfig: CONFIG.GENERATION_CONFIG,
-      };
-
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        const errorMsg = errorData.error?.message || 'שגיאת API';
-
-        // Throw error with status code for queue to handle retries
-        if (response.status === 429) {
-          throw new Error('429 Rate limit exceeded');
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delay = RETRY_DELAYS[attempt - 1];
+          console.log(`⏳ Waiting ${delay}ms before retry ${attempt + 1}/${MAX_RETRIES}...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
         }
 
-        throw new Error(errorMsg);
+        console.log(`🚀 Gemini API request (attempt ${attempt + 1}/${MAX_RETRIES})`);
+
+        const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+
+        const requestBody = {
+          contents: [
+            {
+              parts: [
+                { text: this.buildPrompt() },
+                {
+                  inline_data: {
+                    mime_type: 'image/jpeg',
+                    data: base64Image,
+                  },
+                },
+              ],
+            },
+          ],
+          generationConfig: CONFIG.GENERATION_CONFIG,
+        };
+
+        // Create abort controller for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          console.log('⏰ Request timeout - aborting...');
+          controller.abort();
+        }, TIMEOUT_MS);
+
+        try {
+          const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal,
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            const errorMsg = errorData.error?.message || 'שגיאת API';
+
+            // Throw error with status code for retry logic
+            if (response.status === 429) {
+              throw new Error('429 Rate limit exceeded');
+            }
+
+            throw new Error(errorMsg);
+          }
+
+          const data = await response.json();
+          const usage = data.usageMetadata;
+          const text = data.candidates[0].content.parts[0].text;
+
+          console.log('✅ Gemini Response received');
+          console.log('Token usage:', usage);
+
+          // Extract JSON from response (handle nested objects and arrays)
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) {
+            throw new Error('לא הצלחתי לפרק את תשובת ה-AI');
+          }
+
+          let parsed;
+          try {
+            parsed = JSON.parse(jsonMatch[0]);
+          } catch (jsonError) {
+            console.error('Invalid JSON from AI:', jsonMatch[0]);
+            console.error('JSON Parse Error:', jsonError.message);
+            throw new Error(`AI returned invalid JSON: ${jsonError.message}`);
+          }
+
+          // Validate and categorize the response
+          const validated = this.validateResponse(parsed);
+
+          console.log(`✅ Request succeeded on attempt ${attempt + 1}`);
+          return {
+            ...validated,
+            usage: usage,
+          };
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+
+          // Handle timeout
+          if (fetchError.name === 'AbortError') {
+            throw new Error('Request timed out after 30 seconds');
+          }
+
+          throw fetchError;
+        }
+      } catch (error) {
+        lastError = error;
+        console.error(`❌ Attempt ${attempt + 1} failed:`, error.message);
+
+        // Don't retry on certain errors
+        if (error.message.includes('invalid JSON') || error.message.includes('לא הצלחתי לפרק')) {
+          console.error('❌ Non-retryable error - giving up');
+          throw error;
+        }
+
+        // If this was the last attempt, throw
+        if (attempt === MAX_RETRIES - 1) {
+          console.error(`❌ All ${MAX_RETRIES} attempts failed`);
+          throw new Error(`Failed after ${MAX_RETRIES} attempts. Last error: ${error.message}`);
+        }
+
+        // Otherwise continue to next retry
+        console.log(`🔄 Will retry...`);
       }
-
-      const data = await response.json();
-      const usage = data.usageMetadata;
-      const text = data.candidates[0].content.parts[0].text;
-
-      console.log('Gemini Response:', text);
-      console.log('Token usage:', usage);
-
-      // Extract JSON from response (handle nested objects and arrays)
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('לא הצלחתי לפרק את תשובת ה-AI');
-      }
-
-      let parsed;
-      try {
-        parsed = JSON.parse(jsonMatch[0]);
-      } catch (jsonError) {
-        console.error('Invalid JSON from AI:', jsonMatch[0]);
-        console.error('JSON Parse Error:', jsonError.message);
-        throw new Error(`AI returned invalid JSON: ${jsonError.message}`);
-      }
-
-      // Validate and categorize the response
-      const validated = this.validateResponse(parsed);
-
-      return {
-        ...validated,
-        usage: usage,
-      };
-    } catch (error) {
-      console.error('Gemini API Error:', error);
-      throw error;
     }
+
+    // Should never reach here, but just in case
+    throw lastError || new Error('Unknown error during retries');
   },
 
   /**
