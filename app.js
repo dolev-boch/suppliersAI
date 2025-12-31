@@ -503,10 +503,7 @@ class InvoiceScanner {
         break;
       case 'amount':
         valueElement = this.elements.amountValue;
-        originalValue =
-          this.editedData.total_amount ||
-          this.currentResult.total_amount ||
-          '';
+        originalValue = this.editedData.total_amount || this.currentResult.total_amount || '';
         // Remove ₪ symbol if present
         originalValue = originalValue.toString().replace('₪', '');
         break;
@@ -679,9 +676,7 @@ class InvoiceScanner {
     if (SUPPLIERS.priority.includes(supplierName)) {
       this.editedData.supplier_category = 'priority';
       this.elements.supplierCategory.style.display = 'none';
-    } else if (
-      SUPPLIERS.categories.fuelStations.suppliers.includes(supplierName)
-    ) {
+    } else if (SUPPLIERS.categories.fuelStations.suppliers.includes(supplierName)) {
       this.editedData.supplier_category = 'fuel_station';
       this.elements.supplierCategory.textContent = 'קטגוריה: תחנת דלק';
       this.elements.supplierCategory.style.display = 'block';
@@ -807,7 +802,11 @@ class InvoiceScanner {
         errorMsg = 'חרגת ממכסת השימוש היומית';
       } else if (error.message.includes('Rate limit') || error.message.includes('429')) {
         errorMsg = 'יותר מדי בקשות. המתן מספר שניות ונסה שוב';
-      } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
+      } else if (
+        error.message.includes('network') ||
+        error.message.includes('fetch') ||
+        error.message.includes('Failed to fetch')
+      ) {
         errorMsg = 'בעיית תקשורת - בדוק חיבור לאינטרנט';
       } else if (error.message.includes('timeout') || error.message.includes('timed out')) {
         errorMsg = 'הבקשה ארכה זמן רב - נסה שוב';
@@ -1004,7 +1003,11 @@ class InvoiceScanner {
     }
 
     // If all retries failed, throw the last error
-    throw new Error(`Failed to send to Google Sheets after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
+    throw new Error(
+      `Failed to send to Google Sheets after ${maxRetries} attempts: ${
+        lastError?.message || 'Unknown error'
+      }`
+    );
   }
 
   /**
@@ -1159,38 +1162,59 @@ class InvoiceScanner {
   /**
    * Reset UI for new scan after successful submission
    */
+  /**
+   * Reset UI for new scan after successful submission
+   */
   resetForNewScan() {
     // Clear current results
     this.currentResult = null;
     this.editedData = {};
     this.imageBase64 = null;
+    this.selectedFile = null;
 
     // Hide results section
     this.elements.resultsSection.style.display = 'none';
 
-    // Reset image preview
+    // Hide and clear preview container
+    this.elements.previewContainer.style.display = 'none';
     this.elements.previewImage.src = '';
-    this.elements.previewSection.style.display = 'none';
 
-    // Reset process button
+    // Reset and show process button (disabled until new image selected)
     this.elements.processBtn.disabled = true;
-    this.elements.processBtn.style.display = 'none';
+    this.elements.processBtn.style.display = 'block';
 
     // Show upload zone
     this.elements.uploadZone.style.display = 'block';
 
-    // Hide preview container
-    this.elements.previewContainer.style.display = 'none';
+    // Show bulk upload section
+    if (this.elements.bulkUploadSection) {
+      this.elements.bulkUploadSection.style.display = 'block';
+    }
+
+    // Hide bulk processing state if visible
+    if (this.elements.bulkProcessingState) {
+      this.elements.bulkProcessingState.style.display = 'none';
+    }
 
     // Clear file input
     if (this.elements.fileInput) {
       this.elements.fileInput.value = '';
     }
 
+    // Clear bulk file input
+    if (this.elements.bulkFileInput) {
+      this.elements.bulkFileInput.value = '';
+    }
+
+    // Hide usage section
+    if (this.elements.usageSection) {
+      this.elements.usageSection.style.display = 'none';
+    }
+
     // Show ready status
     this.showStatus('מוכן לסריקת חשבונית חדשה 📄', 'success');
 
-    console.log('UI reset for new scan');
+    console.log('✅ UI reset for new scan');
   }
 }
 
