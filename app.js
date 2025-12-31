@@ -1132,7 +1132,7 @@ class InvoiceScanner {
       // Send to Google Sheets via Apps Script with retry logic
       await this.sendToSheetsWithRetry(dataToSend);
 
-      this.showStatus('הנתונים נשלחו בהצלחה ל-Google Sheets!', 'success');
+      this.showStatus('הנתונים נשלחו בהצלחה ל-Google Sheets! 🎉', 'success');
 
       // Exit edit mode if active
       if (this.editMode) {
@@ -1141,6 +1141,11 @@ class InvoiceScanner {
 
       // Log success
       console.log('Data sent successfully to Google Sheets');
+
+      // Reset UI after successful submission to allow new scan
+      setTimeout(() => {
+        this.resetForNewScan();
+      }, 2000);
     } catch (error) {
       console.error('Sheets error:', error);
       this.showStatus('שגיאה בשליחת הנתונים', 'error');
@@ -1149,6 +1154,43 @@ class InvoiceScanner {
       this.elements.approveAndSendBtn.disabled = false;
       this.elements.approveAndSendBtn.textContent = this.editMode ? 'שמור ושלח' : 'אישור ושליחה';
     }
+  }
+
+  /**
+   * Reset UI for new scan after successful submission
+   */
+  resetForNewScan() {
+    // Clear current results
+    this.currentResult = null;
+    this.editedData = {};
+    this.imageBase64 = null;
+
+    // Hide results section
+    this.elements.resultsSection.style.display = 'none';
+
+    // Reset image preview
+    this.elements.previewImage.src = '';
+    this.elements.previewSection.style.display = 'none';
+
+    // Reset process button
+    this.elements.processBtn.disabled = true;
+    this.elements.processBtn.style.display = 'none';
+
+    // Show upload zone
+    this.elements.uploadZone.style.display = 'block';
+
+    // Hide preview container
+    this.elements.previewContainer.style.display = 'none';
+
+    // Clear file input
+    if (this.elements.fileInput) {
+      this.elements.fileInput.value = '';
+    }
+
+    // Show ready status
+    this.showStatus('מוכן לסריקת חשבונית חדשה 📄', 'success');
+
+    console.log('UI reset for new scan');
   }
 }
 
