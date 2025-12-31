@@ -256,8 +256,14 @@ class InvoiceScanner {
       this.loadingStartTime = Date.now();
       this.startLoadingProgress();
 
-      // Analyze with Gemini
-      const result = await GeminiService.analyzeInvoice(this.imageBase64);
+      // Analyze with Gemini - with progress callback
+      const result = await GeminiService.analyzeInvoice(this.imageBase64, (progress) => {
+        // Update loading text with progress status
+        const loadingText = this.elements.loadingState.querySelector('p');
+        if (loadingText) {
+          loadingText.textContent = progress.message || 'מנתח חשבונית...';
+        }
+      });
       this.currentResult = result;
       this.editedData = {}; // Reset edited data
 

@@ -3,20 +3,20 @@ const GeminiService = {
   /**
    * Analyze invoice image with Gemini AI (using request queue)
    */
-  async analyzeInvoice(base64Image) {
+  async analyzeInvoice(base64Image, onProgress = null) {
     // Use the request queue to serialize and throttle requests
     return geminiQueue.enqueue(async () => {
-      return await this.performAnalysis(base64Image);
+      return await this.performAnalysis(base64Image, onProgress);
     });
   },
 
   /**
    * Perform the actual API call with timeout and retry (called by the queue)
    */
-  async performAnalysis(base64Image) {
-    const MAX_RETRIES = 3;
-    const TIMEOUT_MS = 30000; // 30 seconds
-    const RETRY_DELAYS = [1000, 3000, 5000]; // 1s, 3s, 5s
+  async performAnalysis(base64Image, onProgress = null) {
+    const MAX_RETRIES = 5;
+    const TIMEOUT_MS = 15000; // 15 seconds - user doesn't want to wait longer
+    const RETRY_DELAYS = [500, 1000, 2000, 3000]; // Faster retries
 
     let lastError = null;
 
@@ -24,11 +24,15 @@ const GeminiService = {
       try {
         if (attempt > 0) {
           const delay = RETRY_DELAYS[attempt - 1];
-          console.log(`⏳ Waiting ${delay}ms before retry ${attempt + 1}/${MAX_RETRIES}...`);
+          const message = `ממתין ${Math.round(delay/1000)} שניות לפני ניסיון ${attempt + 1}...`;
+          console.log(`⏳ ${message}`);
+          if (onProgress) onProgress({ status: 'retrying', attempt, message });
           await new Promise(resolve => setTimeout(resolve, delay));
         }
 
-        console.log(`🚀 Gemini API request (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        const message = attempt === 0 ? 'מנתח חשבונית...' : `ניסיון ${attempt + 1} מתוך ${MAX_RETRIES}...`;
+        console.log(`🚀 ${message}`);
+        if (onProgress) onProgress({ status: 'analyzing', attempt: attempt + 1, total: MAX_RETRIES, message });
 
         const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
@@ -52,7 +56,8 @@ const GeminiService = {
         // Create abort controller for timeout
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
-          console.log('⏰ Request timeout - aborting...');
+          console.log(`⏰ Timeout after 15 seconds - aborting attempt ${attempt + 1}...`);
+          if (onProgress) onProgress({ status: 'timeout', attempt: attempt + 1, message: 'זמן התגובה פג - מנסה שוב...' });
           controller.abort();
         }, TIMEOUT_MS);
 
@@ -86,6 +91,7 @@ const GeminiService = {
 
           console.log('✅ Gemini Response received');
           console.log('Token usage:', usage);
+          if (onProgress) onProgress({ status: 'processing', message: 'עיבוד תשובה...' });
 
           // Extract JSON from response (handle nested objects and arrays)
           const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -106,6 +112,8 @@ const GeminiService = {
           const validated = this.validateResponse(parsed);
 
           console.log(`✅ Request succeeded on attempt ${attempt + 1}`);
+          if (onProgress) onProgress({ status: 'success', attempt: attempt + 1, message: 'החשבונית נותחה בהצלחה!' });
+
           return {
             ...validated,
             usage: usage,
@@ -115,7 +123,7 @@ const GeminiService = {
 
           // Handle timeout
           if (fetchError.name === 'AbortError') {
-            throw new Error('Request timed out after 30 seconds');
+            throw new Error(`Request timed out after 15 seconds (attempt ${attempt + 1})`);
           }
 
           throw fetchError;
@@ -127,17 +135,21 @@ const GeminiService = {
         // Don't retry on certain errors
         if (error.message.includes('invalid JSON') || error.message.includes('לא הצלחתי לפרק')) {
           console.error('❌ Non-retryable error - giving up');
+          if (onProgress) onProgress({ status: 'error', message: 'שגיאה בפענוח התגובה' });
           throw error;
         }
 
         // If this was the last attempt, throw
         if (attempt === MAX_RETRIES - 1) {
           console.error(`❌ All ${MAX_RETRIES} attempts failed`);
+          if (onProgress) onProgress({ status: 'failed', message: `כל ${MAX_RETRIES} הניסיונות נכשלו. נא לרענן ולנסות שוב.` });
           throw new Error(`Failed after ${MAX_RETRIES} attempts. Last error: ${error.message}`);
         }
 
         // Otherwise continue to next retry
-        console.log(`🔄 Will retry...`);
+        const message = `ניסיון ${attempt + 1} נכשל - מנסה שוב...`;
+        console.log(`🔄 ${message}`);
+        if (onProgress) onProgress({ status: 'retry', attempt: attempt + 1, message });
       }
     }
 
