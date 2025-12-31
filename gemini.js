@@ -190,11 +190,14 @@ const GeminiService = {
 → supplier_category: "fuel_station"
 
 **רשתות מזון:** שופרסל, רמי לוי, ויקטורי, יוחננוף, אלונית, מחסני השוק, טרמינל 3, יינות ביתן, אושר עד, מגא, חצי חינם, קופיקס, דוכן צמח
-**חשוב מאוד:** חפש את השמות האלה בדיוק! לדוגמה:
-- "ויקטורי" / "Victory" → רשתות מזון (לא שונות!)
-- "רמי לוי" / "Rami Levy" → רשתות מזון (לא שונות!)
-- "דוכן צמח" (גם אם יש סאב-לוגו "דור אלון ניהול מתחמים קימעונאים") → **דוכן צמח** רשתות מזון (קח את הלוגו הראשי הגדול!)
-- אם יש לוגו גדול של "דוכן צמח" ולוגו קטן של "דור אלון" → supplier_name: "דוכן צמח" (לא דור אלון!)
+**חשוב מאוד:**
+- חפש את השמות האלה בדיוק! לדוגמה:
+  - "ויקטורי" / "Victory" → רשתות מזון (לא שונות!)
+  - "רמי לוי" / "Rami Levy" → רשתות מזון (לא שונות!)
+  - "דוכן צמח" (גם אם יש סאב-לוגו "דור אלון ניהול מתחמים קימעונאים") → **דוכן צמח** רשתות מזון (קח את הלוגו הראשי הגדול!)
+  - אם יש לוגו גדול של "דוכן צמח" ולוגו קטן של "דור אלון" → supplier_name: "דוכן צמח" (לא דור אלון!)
+- **רשתות מזון תמיד מוציאות חשבונית מס (invoice), אף פעם לא תעודת משלוח (delivery_note)!**
+- **רשתות מזון חייבות לכלול 4 ספרות כרטיס אשראי! אם לא מצאת - חפש שוב בחלק התשלום!**
 מילות זיהוי: סופר, supermarket, שוק, מרכול, market, דוכן
 → supplier_category: "supermarket"
 **הערה:** אם המשתמש מוסיף ספק חדש שלא ברשימה, אפשר לסווג אותו כ-"supermarket" אם יש מילות זיהוי כמו: סופר, מרכול, שוק, market
@@ -361,7 +364,8 @@ const GeminiService = {
       const categoryMatch = SupplierMatcher.findCategoryMatch(supplierName);
       if (categoryMatch.matched) {
         console.log('✅ Category matched:', categoryMatch.category);
-        return {
+
+        let validatedResponse = {
           ...response,
           supplier_category: supplierCategory,
           supplier_name: categoryMatch.supplierName || supplierName,
@@ -370,6 +374,23 @@ const GeminiService = {
             categoryMatch.confidence
           ),
         };
+
+        // CRITICAL: Enforce supermarket rules
+        if (supplierCategory === 'supermarket') {
+          // Rule 1: Supermarkets are ALWAYS invoices, never delivery notes
+          if (validatedResponse.document_type === 'delivery_note') {
+            console.log('🔧 Correcting supermarket document type from delivery_note to invoice');
+            validatedResponse.document_type = 'invoice';
+          }
+
+          // Rule 2: Supermarkets MUST have credit card (warn if missing)
+          if (!validatedResponse.credit_card_last4 || validatedResponse.credit_card_last4 === 'null') {
+            console.warn('⚠️ WARNING: Supermarket missing credit card - this should not happen!');
+            // Don't block, but log prominently
+          }
+        }
+
+        return validatedResponse;
       }
     }
 

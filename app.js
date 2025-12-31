@@ -787,20 +787,33 @@ class InvoiceScanner {
   handleError(error) {
     let errorMsg = 'שגיאה בניתוח החשבונית';
 
-    if (error.message.includes('API_KEY') || error.message.includes('API key')) {
-      errorMsg = 'מפתח API לא תקין';
-    } else if (error.message.includes('quota') || error.message.includes('QUOTA')) {
-      errorMsg = 'חרגת ממכסת השימוש היומית';
-    } else if (error.message.includes('Rate limit')) {
-      errorMsg = 'יותר מדי בקשות. מנסה שוב...';
-    } else if (error.message.includes('network') || error.message.includes('fetch')) {
-      errorMsg = 'בעיית תקשורת - בדוק חיבור לאינטרנט';
+    if (!error) {
+      errorMsg = 'שגיאה לא ידועה - נא לנסות שוב';
+    } else if (error.message) {
+      if (error.message.includes('API_KEY') || error.message.includes('API key')) {
+        errorMsg = 'מפתח API לא תקין';
+      } else if (error.message.includes('quota') || error.message.includes('QUOTA')) {
+        errorMsg = 'חרגת ממכסת השימוש היומית';
+      } else if (error.message.includes('Rate limit') || error.message.includes('429')) {
+        errorMsg = 'יותר מדי בקשות. המתן מספר שניות ונסה שוב';
+      } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
+        errorMsg = 'בעיית תקשורת - בדוק חיבור לאינטרנט';
+      } else if (error.message.includes('timeout') || error.message.includes('timed out')) {
+        errorMsg = 'הבקשה ארכה זמן רב - נסה שוב';
+      } else if (error.message.includes('Failed after')) {
+        errorMsg = 'כל הניסיונות נכשלו - נסה שוב במספר שניות';
+      }
     }
 
     this.showStatus(errorMsg, 'error');
 
     // Show detailed error in console
     console.error('Error details:', error);
+
+    // Ensure UI is reset properly
+    this.stopLoadingProgress();
+    this.elements.loadingState.style.display = 'none';
+    this.elements.processBtn.disabled = false;
   }
 
   /**
