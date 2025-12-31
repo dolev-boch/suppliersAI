@@ -1,39 +1,46 @@
-// ============================================================================
-// Zuza Patisserie - Invoice Scanner Backend
-// Main spreadsheet processing script WITH PRODUCT TRACKING
-// ============================================================================
+/**
+ * Google Apps Script for Invoice Scanner - WITH PRODUCT TRACKING
+ *
+ * Sheet ID: 1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM
+ * Products Sheet ID: 1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ
+ */
 
-// Spreadsheet configuration
+// Starting row for data entry (always row 5)
 const DATA_START_ROW = 5;
 
-// Column mappings for regular suppliers
+// Column mapping for regular suppliers (ספקים רגילים)
 const REGULAR_COLUMNS = {
-  supplierName: 1,    // A
-  documentDate: 2,     // B
-  documentNumber: 3,   // C
-  totalAmount: 4       // D
+  DATE: 2, // B - תאריך אספקה
+  DELIVERY_NUM: 3, // C - מס' תעודת משלוח
+  DELIVERY_SUM: 4, // D - סכום תעודת משלוח
+  INVOICE_NUM: 5, // E - מס' חשבונית מס
+  INVOICE_SUM: 6, // F - סכום חשבונית מס
+  NOTES: 7, // G - הערות
 };
 
-// Column mappings for credit card suppliers (includes credit card column)
+// Column mapping for special categories (with credit card)
 const SPECIAL_COLUMNS = {
-  supplierName: 1,    // A
-  documentDate: 2,     // B
-  documentNumber: 3,   // C
-  creditCard: 4,       // D (credit card number)
-  totalAmount: 5       // E
+  DATE: 2, // B - תאריך אספקה
+  DELIVERY_NUM: 3, // C - מס' תעודת משלוח
+  DELIVERY_SUM: 4, // D - סכום תעודת משלוח
+  INVOICE_NUM: 5, // E - מס' חשבונית מס
+  INVOICE_SUM: 6, // F - סכום חשבונית מס
+  NOTES: 7, // G - הערות (כולל שם הספק)
+  CREDIT_CARD: 8, // H - מס' כרטיס אשראי 4 ספרות
 };
 
-// Sheet names
+// Sheet names mapping
 const SHEET_NAMES = {
-  other: 'שונות',
-  gasStation: 'תחנת דלק',
-  foodChains: 'רשתות מזון',
-  nurseries: 'משתלות'
+  priority: null, // Priority suppliers use their exact name as sheet name
+  fuel_station: 'תחנת דלק',
+  supermarket: 'רשתות מזון',
+  nursery: 'משתלות',
+  other: 'שונות', // "Other" category suppliers go to שונות sheet
 };
 
-// ⚠️ CRITICAL: PASTE YOUR PRODUCTS TRACKING WEB APP URL HERE
-// Get it from: Products spreadsheet → Deploy → Manage deployments → Copy Web App URL
-const PRODUCTS_SCRIPT_URL = 'PASTE_YOUR_PRODUCTS_TRACKING_URL_HERE';
+// Product tracking script URL - PASTE YOUR DEPLOYMENT URL HERE
+const PRODUCTS_SCRIPT_URL =
+  'https://script.google.com/macros/s/AKfycbwjLT8M5roreoTPk32Wn3a48RUZLK6x4skKOBjlvVVv8UswpfPteB-2KGKkDW6mE5RB/exec';
 
 /**
  * Handle POST requests from the web app
@@ -58,7 +65,7 @@ function doPost(e) {
     Logger.log(`📋 Target sheet: ${sheetName}`);
 
     // Check if this is שונות sheet
-    const isOtherCategory = (sheetName === SHEET_NAMES.other);
+    const isOtherCategory = sheetName === SHEET_NAMES.other;
 
     // Add data to sheet
     const success = addDataToSheet(sheetInfo, data);
@@ -107,7 +114,11 @@ function sendProductsToTracking(data) {
     Logger.log(`   Supplier: ${data.supplier_name}`);
     Logger.log(`   Products count: ${data.products ? data.products.length : 0}`);
 
-    if (!PRODUCTS_SCRIPT_URL || PRODUCTS_SCRIPT_URL === '' || PRODUCTS_SCRIPT_URL === 'PASTE_YOUR_PRODUCTS_TRACKING_URL_HERE') {
+    if (
+      !PRODUCTS_SCRIPT_URL ||
+      PRODUCTS_SCRIPT_URL === '' ||
+      PRODUCTS_SCRIPT_URL === 'PASTE_YOUR_URL_HERE'
+    ) {
       Logger.log('⚠️ Products script URL not configured. Skipping product tracking.');
       return;
     }
@@ -115,97 +126,103 @@ function sendProductsToTracking(data) {
     const payload = {
       supplier_name: data.supplier_name,
       document_date: data.document_date,
-      products: data.products || []
+      products: data.products || [],
     };
 
-    Logger.log('📤 Sending to: ' + PRODUCTS_SCRIPT_URL);
-    Logger.log('   Payload: ' + JSON.stringify(payload));
+    Logger.log(`📤 Sending to: ${PRODUCTS_SCRIPT_URL}`);
+    Logger.log(`   Payload: ${JSON.stringify(payload)}`);
 
     const options = {
       method: 'post',
       contentType: 'application/json',
       payload: JSON.stringify(payload),
-      muteHttpExceptions: true
+      muteHttpExceptions: true,
     };
 
     const response = UrlFetchApp.fetch(PRODUCTS_SCRIPT_URL, options);
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
 
-    Logger.log('📥 Response code: ' + responseCode);
-    Logger.log('   Response: ' + responseText);
+    Logger.log(`📥 Response code: ${responseCode}`);
+    Logger.log(`   Response: ${responseText}`);
 
     if (responseCode === 200) {
       Logger.log('✅ Products sent successfully to tracking spreadsheet');
     } else {
-      Logger.log('⚠️ Products tracking response: ' + responseCode + ' - ' + responseText);
+      Logger.log(`⚠️ Products tracking response: ${responseCode} - ${responseText}`);
     }
   } catch (error) {
     Logger.log('❌ Error sending products to tracking: ' + error.toString());
-    Logger.log('   This is non-blocking - invoice data was still saved');
+    Logger.log('   Stack: ' + error.stack);
+    // Don't fail the main invoice processing if product tracking fails
   }
 }
 
 /**
- * Get sheet info based on supplier data
+ * Get sheet information based on supplier category
  */
 function getSheetInfo(data) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = null;
+  const ss = SpreadsheetApp.openById('1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM');
+  let sheetName;
   let useSpecialColumns = false;
 
-  // Priority suppliers - match by name
-  const prioritySuppliers = [
-    'אלכס ברק', 'אחים לוי', 'אלמנדוס בע"מ', 'אפי שיווק ביצים', 'אקיופוז', 'ארגל',
-    'אריזים שפי פלסט', 'בזק', 'הפרסי פירות וירקות בע"מ', 'דקל דברי נוי',
-    'ח.ל.ק.ט קרח', 'טויטו שחר מחלבות גד', 'טכנאים', 'מ. אש קפה', 'מגבוני סיוון',
-    'מיכל גינון', 'מיכלי זהב', 'מירב אוזן', 'מקאנו', 'מר קייק', 'מרכז הירק',
-    'משתלות', 'נטפים', 'פוליבה', 'פיין וויין גבינות', 'פנדרייה (אנשי הלחם)',
-    'פפירוס', 'פריניב', 'צח', 'קיבוץ כנרת', 'רפת א.א.א.', 'תבליני כהן'
-  ];
+  // Determine which sheet to use
+  if (data.supplier_category === 'priority') {
+    // Priority suppliers - use supplier name as sheet name
+    sheetName = data.supplier_name;
+    useSpecialColumns = false;
+  } else if (data.supplier_category === 'fuel_station') {
+    // Fuel stations
+    sheetName = SHEET_NAMES.fuel_station;
+    useSpecialColumns = true;
+  } else if (data.supplier_category === 'supermarket') {
+    // Supermarkets
+    sheetName = SHEET_NAMES.supermarket;
+    useSpecialColumns = true;
+  } else if (data.supplier_category === 'nursery') {
+    // Nurseries
+    sheetName = SHEET_NAMES.nursery;
+    useSpecialColumns = true;
+  } else {
+    // Other - route to "שונות" sheet
+    sheetName = SHEET_NAMES.other;
+    useSpecialColumns = true;
+  }
 
-  const supplierName = data.supplier_name;
-  const normalizedSupplier = normalizeText(supplierName);
+  let sheet = ss.getSheetByName(sheetName);
 
-  // Check priority suppliers first
-  for (const prioritySupplier of prioritySuppliers) {
-    const normalized = normalizeText(prioritySupplier);
-    if (normalized === normalizedSupplier || normalizedSupplier.includes(normalized) || normalized.includes(normalizedSupplier)) {
-      sheet = ss.getSheetByName(prioritySupplier);
-      if (sheet) {
-        Logger.log(`✅ Priority supplier matched: "${supplierName}" → "${prioritySupplier}" (exact)`);
-        data.supplier_category = 'priority';
-        data.supplier_name = prioritySupplier;
-        useSpecialColumns = false;
-        return { sheet, useSpecialColumns };
+  // If sheet doesn't exist for priority supplier, try to find similar name
+  if (!sheet && data.supplier_category === 'priority') {
+    // Try to find sheet with similar name
+    const allSheets = ss.getSheets();
+    for (const s of allSheets) {
+      if (normalizeText(s.getName()) === normalizeText(sheetName)) {
+        sheet = s;
+        break;
       }
     }
   }
 
-  // Check special categories
-  if (data.supplier_category === 'gas_station' || normalizedSupplier.includes('דלק') || normalizedSupplier.includes('סונול') || normalizedSupplier.includes('פז')) {
-    sheet = ss.getSheetByName(SHEET_NAMES.gasStation);
-    useSpecialColumns = true;
-    Logger.log(`✅ Gas station category: "${supplierName}"`);
-  } else if (data.supplier_category === 'food_chain' || ['שופרסל', 'רמי לוי', 'ויקטורי', 'יינות ביתן'].some(chain => normalizedSupplier.includes(normalizeText(chain)))) {
-    sheet = ss.getSheetByName(SHEET_NAMES.foodChains);
-    useSpecialColumns = true;
-    Logger.log(`✅ Food chain category: "${supplierName}"`);
-  } else if (data.supplier_category === 'nursery' || normalizedSupplier.includes('משתל')) {
-    sheet = ss.getSheetByName(SHEET_NAMES.nurseries);
-    useSpecialColumns = false;
-    Logger.log(`✅ Nursery category: "${supplierName}"`);
-  } else {
-    sheet = ss.getSheetByName(SHEET_NAMES.other);
-    useSpecialColumns = false;
-    Logger.log(`✅ Other category: "${supplierName}"`);
+  // If still no sheet found, log error
+  if (!sheet) {
+    Logger.log('Sheet not found: ' + sheetName);
+    Logger.log(
+      'Available sheets: ' +
+        ss
+          .getSheets()
+          .map((s) => s.getName())
+          .join(', ')
+    );
   }
 
-  return { sheet, useSpecialColumns };
+  return {
+    sheet: sheet,
+    useSpecialColumns: useSpecialColumns,
+  };
 }
 
 /**
- * Add data to the specified sheet
+ * Add data to the appropriate sheet - WITH DATE SORTING (oldest to newest)
  */
 function addDataToSheet(sheetInfo, data) {
   try {
@@ -213,144 +230,258 @@ function addDataToSheet(sheetInfo, data) {
     const useSpecialColumns = sheetInfo.useSpecialColumns;
     const columns = useSpecialColumns ? SPECIAL_COLUMNS : REGULAR_COLUMNS;
 
-    Logger.log(`Writing to sheet: ${sheet.getName()}, row: ${DATA_START_ROW}`);
+    // Parse the incoming date
+    const newDate = parseIsraeliDate(data.document_date);
 
-    // Parse the document date
-    const documentDate = parseIsraeliDate(data.document_date);
-
-    // Find the correct row to insert (sorted by date, newest first)
-    let targetRow = DATA_START_ROW;
-    const lastRow = sheet.getLastRow();
-
-    if (lastRow >= DATA_START_ROW) {
-      const dateColumn = columns.documentDate;
-      const existingDates = sheet.getRange(DATA_START_ROW, dateColumn, lastRow - DATA_START_ROW + 1, 1).getValues();
-
-      for (let i = 0; i < existingDates.length; i++) {
-        const existingDate = existingDates[i][0];
-        if (existingDate instanceof Date && documentDate > existingDate) {
-          targetRow = DATA_START_ROW + i;
+    if (!newDate) {
+      Logger.log('⚠️ Could not parse date, appending to end');
+      let targetRow = DATA_START_ROW;
+      for (let row = DATA_START_ROW; row <= sheet.getMaxRows(); row++) {
+        const cellValue = sheet.getRange(row, columns.DATE).getValue();
+        if (!cellValue || cellValue === '') {
+          targetRow = row;
           break;
         }
       }
+      Logger.log('Writing to sheet: ' + sheet.getName() + ', row: ' + targetRow);
+      writeRowData(sheet, targetRow, columns, data, useSpecialColumns);
+      return true;
+    }
 
-      if (targetRow === DATA_START_ROW && lastRow >= DATA_START_ROW) {
-        targetRow = lastRow + 1;
+    // Find the correct position to insert (sorted by date, oldest to newest)
+    let targetRow = -1;
+    let needsShift = false;
+
+    for (let row = DATA_START_ROW; row <= sheet.getMaxRows(); row++) {
+      const existingDateValue = sheet.getRange(row, columns.DATE).getValue();
+
+      if (!existingDateValue || existingDateValue === '') {
+        targetRow = row;
+        needsShift = false;
+        Logger.log('📍 Found empty row at: ' + row);
+        break;
+      }
+
+      const existingDate = new Date(existingDateValue);
+
+      if (newDate < existingDate) {
+        targetRow = row;
+        needsShift = true;
+        Logger.log('📍 Found insertion point before row: ' + row);
+        break;
       }
     }
 
-    // Shift existing data down if inserting in the middle
-    if (targetRow <= lastRow) {
+    if (targetRow === -1) {
+      targetRow = DATA_START_ROW;
+      for (let row = DATA_START_ROW; row <= sheet.getMaxRows(); row++) {
+        const cellValue = sheet.getRange(row, columns.DATE).getValue();
+        if (!cellValue || cellValue === '') {
+          targetRow = row;
+          break;
+        }
+      }
+      needsShift = false;
+      Logger.log('📍 Appending to end at row: ' + targetRow);
+    }
+
+    if (needsShift) {
       shiftDataDown(sheet, targetRow, columns, useSpecialColumns);
     }
 
-    // Write the data
+    Logger.log('Writing to row: ' + targetRow);
     writeRowData(sheet, targetRow, columns, data, useSpecialColumns);
-
-    // Format the row
-    formatDataRow(sheet, targetRow, useSpecialColumns);
 
     Logger.log('✅ Data written successfully');
     return true;
   } catch (error) {
-    Logger.log('❌ Error in addDataToSheet: ' + error.toString());
+    Logger.log('❌ Error adding data: ' + error.toString());
     return false;
   }
 }
 
 /**
- * Shift data down to make room for new row
+ * Shift existing data down by one row
  */
 function shiftDataDown(sheet, startRow, columns, useSpecialColumns) {
-  const lastRow = sheet.getLastRow();
-  const numCols = useSpecialColumns ? 5 : 4;
+  try {
+    Logger.log('📋 Shifting data down from row ' + startRow);
 
-  const dataRange = sheet.getRange(startRow, 1, lastRow - startRow + 1, numCols);
-  const values = dataRange.getValues();
-  const formats = dataRange.getNumberFormats();
+    let lastRow = startRow;
+    for (let row = startRow; row <= sheet.getMaxRows(); row++) {
+      const cellValue = sheet.getRange(row, columns.DATE).getValue();
+      if (!cellValue || cellValue === '') {
+        lastRow = row - 1;
+        break;
+      }
+    }
 
-  const targetRange = sheet.getRange(startRow + 1, 1, lastRow - startRow + 1, numCols);
-  targetRange.setValues(values);
-  targetRange.setNumberFormats(formats);
+    if (lastRow < startRow) {
+      Logger.log('No data to shift');
+      return;
+    }
+
+    const startCol = 2;
+    const endCol = useSpecialColumns ? 8 : 7;
+    const numCols = endCol - startCol + 1;
+
+    for (let row = lastRow; row >= startRow; row--) {
+      const sourceRange = sheet.getRange(row, startCol, 1, numCols);
+      const targetRange = sheet.getRange(row + 1, startCol, 1, numCols);
+      sourceRange.copyTo(targetRange);
+    }
+
+    sheet.getRange(startRow, startCol, 1, numCols).clear();
+    Logger.log('✅ Data shifted');
+  } catch (error) {
+    Logger.log('❌ Error shifting data: ' + error.toString());
+    throw error;
+  }
 }
 
 /**
- * Helper function to write data to a specific row
+ * Write data to a specific row
  */
 function writeRowData(sheet, targetRow, columns, data, useSpecialColumns) {
-  const documentDate = parseIsraeliDate(data.document_date);
-  const totalAmount = parseAmount(data.total_amount);
+  const isDeliveryNote = data.document_type === 'delivery_note';
+  const isInvoice = data.document_type === 'invoice';
 
-  sheet.getRange(targetRow, columns.supplierName).setValue(data.supplier_name);
-  sheet.getRange(targetRow, columns.documentDate).setValue(documentDate);
-  sheet.getRange(targetRow, columns.documentNumber).setValue(data.document_number || '');
-
-  if (useSpecialColumns && data.credit_card_last4) {
-    sheet.getRange(targetRow, columns.creditCard).setValue(data.credit_card_last4);
-    sheet.getRange(targetRow, columns.totalAmount).setValue(totalAmount);
-  } else if (useSpecialColumns) {
-    sheet.getRange(targetRow, columns.creditCard).setValue('');
-    sheet.getRange(targetRow, columns.totalAmount).setValue(totalAmount);
-  } else {
-    sheet.getRange(targetRow, columns.totalAmount).setValue(totalAmount);
+  // Date
+  if (data.document_date) {
+    const dateObj = parseIsraeliDate(data.document_date);
+    if (dateObj) {
+      sheet.getRange(targetRow, columns.DATE).setValue(dateObj);
+      sheet.getRange(targetRow, columns.DATE).setNumberFormat('dd/mm/yyyy');
+    } else {
+      sheet.getRange(targetRow, columns.DATE).setValue(data.document_date);
+    }
   }
+
+  // Delivery note
+  if (isDeliveryNote && data.document_number) {
+    sheet.getRange(targetRow, columns.DELIVERY_NUM).setValue(data.document_number);
+  }
+  if (isDeliveryNote && data.total_amount) {
+    const amount = parseAmount(data.total_amount);
+    sheet.getRange(targetRow, columns.DELIVERY_SUM).setValue(amount);
+  }
+
+  // Invoice
+  if (isInvoice && data.document_number) {
+    sheet.getRange(targetRow, columns.INVOICE_NUM).setValue(data.document_number);
+  }
+  if (isInvoice && data.total_amount) {
+    const amount = parseAmount(data.total_amount);
+    sheet.getRange(targetRow, columns.INVOICE_SUM).setValue(amount);
+  }
+
+  // Notes
+  let notes = '';
+  if (useSpecialColumns) {
+    notes = data.supplier_name || '';
+    if (data.notes) {
+      notes += (notes ? ' | ' : '') + data.notes;
+    }
+  } else {
+    notes = data.notes || '';
+  }
+  if (notes) {
+    sheet.getRange(targetRow, columns.NOTES).setValue(notes);
+  }
+
+  // Credit card
+  if (useSpecialColumns && data.credit_card_last4) {
+    sheet.getRange(targetRow, columns.CREDIT_CARD).setValue('****' + data.credit_card_last4);
+  }
+
+  formatDataRow(sheet, targetRow, useSpecialColumns);
 }
 
 /**
- * Parse Israeli date format (DD/MM/YYYY) to Date object
+ * Parse Israeli date format DD/MM/YYYY to Date object
  */
 function parseIsraeliDate(dateString) {
-  if (!dateString) return new Date();
+  if (!dateString) return null;
 
-  const parts = dateString.split('/');
-  if (parts.length === 3) {
-    const day = parseInt(parts[0]);
-    const month = parseInt(parts[1]) - 1;
-    const year = parseInt(parts[2]);
-    return new Date(year, month, day);
+  try {
+    const parts = dateString.trim().split('/');
+    if (parts.length !== 3) return null;
+
+    const day = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10);
+    const year = parseInt(parts[2], 10);
+
+    if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+    if (day < 1 || day > 31 || month < 1 || month > 12 || year < 2000) return null;
+
+    const dateObj = new Date(year, month - 1, day, 12, 0, 0);
+
+    if (dateObj.getDate() !== day || dateObj.getMonth() !== month - 1) return null;
+
+    return dateObj;
+  } catch (error) {
+    Logger.log('❌ Error parsing date: ' + error.toString());
+    return null;
   }
-
-  return new Date();
 }
 
 /**
- * Parse amount string to number
+ * Parse amount with comma separator
  */
 function parseAmount(amountString) {
-  if (typeof amountString === 'number') return amountString;
   if (!amountString) return 0;
 
-  const cleaned = amountString.toString().replace(/[^\d.-]/g, '');
-  return parseFloat(cleaned) || 0;
+  try {
+    let str = String(amountString).trim();
+    str = str.replace(/[₪$€£¥]/g, '');
+    str = str.replace(/NIS|ILS/gi, '');
+    str = str.trim();
+    str = str.replace(/,/g, '');
+
+    const amount = parseFloat(str);
+    return isNaN(amount) ? 0 : amount;
+  } catch (error) {
+    return 0;
+  }
 }
 
 /**
- * Format data row
+ * Format the data row
  */
 function formatDataRow(sheet, row, useSpecialColumns) {
-  const numCols = useSpecialColumns ? 5 : 4;
-  const rowRange = sheet.getRange(row, 1, 1, numCols);
-  rowRange.setHorizontalAlignment('right');
-
-  const dateCol = useSpecialColumns ? 2 : 2;
-  sheet.getRange(row, dateCol).setNumberFormat('dd/mm/yyyy');
-
-  const amountCol = useSpecialColumns ? 5 : 4;
-  sheet.getRange(row, amountCol).setNumberFormat('#,##0.00');
+  try {
+    const lastColumn = useSpecialColumns ? 8 : 7;
+    const range = sheet.getRange(row, 2, 1, lastColumn - 1);
+    range.setHorizontalAlignment('right');
+    range.setVerticalAlignment('middle');
+    range.setBorder(true, true, true, true, true, true);
+  } catch (error) {
+    Logger.log('Error formatting row: ' + error.toString());
+  }
 }
 
 /**
  * Normalize text for comparison
  */
 function normalizeText(text) {
-  return text.toLowerCase().trim().replace(/\s+/g, ' ').replace(/[״׳'"]/g, '');
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .replace(/[\"'\(\)]/g, '')
+    .replace(/בע\"מ|בע"מ|בעמ|בע מ/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
- * Create response object
+ * Create JSON response
  */
 function createResponse(success, message) {
   return ContentService.createTextOutput(
-    JSON.stringify({ success: success, message: message })
+    JSON.stringify({
+      success: success,
+      message: message,
+      timestamp: new Date().toISOString(),
+    })
   ).setMimeType(ContentService.MimeType.JSON);
 }
