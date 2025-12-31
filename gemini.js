@@ -213,11 +213,15 @@ const GeminiService = {
 ## שדות נדרשים:
 
 **מספר מסמך (קריטי!):**
-- **תחילה זהה את סוג המסמך:** חשבונית מס, תעודת משלוח, או חשבונית קבלה
+- **תחילה זהה את סוג המסמך:** חשבונית מס, תעודת משלוח, חשבונית קבלה, או חשבונית זיכוי
 - **חשבונית מס:** חפש ליד הכותרות: "מספר חשבונית", "מס' חשבונית", "חשבונית מס'", "מספר חשבונית מס", "Invoice Number", "מס חשבונית"
 - **תעודת משלוח:** חפש ליד הכותרות: "מספר תעודת משלוח", "מס' תעודה", "ת.משלוח", "Delivery Note", "מספר משלוח"
 - **חשבונית קבלה / קבלה:** חפש ליד הכותרות: "חשבונית קבלה", "מספר קבלה", "מס' קבלה", "Receipt Number", "מס קבלה"
   - אם רשום "חשבונית קבלה" ויש מספר ליד זה → זה המספר הנכון! (לא מספר אקראי אחר)
+- **חשבונית זיכוי (CRITICAL!):** חפש את המילים "חשבונית זיכוי", "זיכוי", "Credit Invoice", "Credit Note"
+  - אם מצאת → document_type: "credit_invoice"
+  - הסכום יהיה **שלילי** (עם מינוס)
+  - בהערות חייב להיות: "חשבונית זיכוי"
 - **כלל זהב:** קח את המספר שנמצא **מיד אחרי** כותרת המסמך (בשורה אחת, או מתחת ישירות)
 - **אל תיקח מספר אקראי!** ודא שהמספר נמצא ליד הכותרת הנכונה בהתאם לסוג המסמך
 - אל תקצר - החזר מספר מלא (לפעמים 10-15 ספרות)
@@ -231,7 +235,10 @@ const GeminiService = {
 - דוגמאות תקינות: 15/12/2024, 31/01/2025, 05/03/2024
 - דוגמאות שגויות: 15/12/20 (צריך 2020 או 2025), 15/12/2023 (ישן מדי)
 
-**סכום:** הסכום הכולל הסופי בשקלים.
+**סכום:**
+- הסכום הכולל הסופי בשקלים
+- **אם חשבונית זיכוי:** הסכום חייב להיות **שלילי** (עם מינוס -), לדוגמה: "-256.50"
+- **אם חשבונית רגילה:** הסכום חיובי, לדוגמה: "256.50"
 
 **כרטיס אשראי (קריטי!):**
 - **חובה לבדוק ולמצוא** עבור: תחנת דלק (fuel_station), רשתות מזון (supermarket), משתלות (nursery), שונות (other)
@@ -297,7 +304,8 @@ const GeminiService = {
   "supplier_confidence": 95,
   "document_number": "מלא",
   "document_number_confidence": 98,
-  "document_type": "invoice|delivery_note",
+  "document_type": "invoice|delivery_note|credit_invoice",
+  "notes": "הערות נוספות (אם חשבונית זיכוי - חייב להכיל 'חשבונית זיכוי')",
   "document_date": "DD/MM/YYYY",
   "date_confidence": 95,
   "total_amount": "234.50",
@@ -323,7 +331,8 @@ const GeminiService = {
 - אסור להמציא מידע
 - עקוב באלגוריתם הזיהוי בדיוק
 - confidence גבוה (90+) רק למידע ברור
-- document_type: "invoice" לחשבונית מס, "delivery_note" לתעודת משלוח
+- document_type: "invoice" לחשבונית מס, "delivery_note" לתעודת משלוח, "credit_invoice" לחשבונית זיכוי
+- **חשבונית זיכוי:** אם זיהית חשבונית זיכוי → סכום שלילי + "חשבונית זיכוי" בהערות
 - כרטיס אשראי: חפש בכל החשבונית, אל תפספס!
 
 **חשוב! תבנית JSON:**
@@ -377,7 +386,7 @@ const GeminiService = {
 
         // CRITICAL: Enforce supermarket rules
         if (supplierCategory === 'supermarket') {
-          // Rule 1: Supermarkets are ALWAYS invoices, never delivery notes
+          // Rule 1: Supermarkets are ALWAYS invoices, never delivery notes (unless credit invoice)
           if (validatedResponse.document_type === 'delivery_note') {
             console.log('🔧 Correcting supermarket document type from delivery_note to invoice');
             validatedResponse.document_type = 'invoice';
@@ -387,6 +396,25 @@ const GeminiService = {
           if (!validatedResponse.credit_card_last4 || validatedResponse.credit_card_last4 === 'null') {
             console.warn('⚠️ WARNING: Supermarket missing credit card - this should not happen!');
             // Don't block, but log prominently
+          }
+        }
+
+        // CRITICAL: Handle credit invoices (חשבונית זיכוי)
+        if (validatedResponse.document_type === 'credit_invoice') {
+          console.log('💳 Credit invoice detected - ensuring negative amount and note');
+
+          // Ensure amount is negative
+          const amount = parseFloat(validatedResponse.total_amount);
+          if (!isNaN(amount) && amount > 0) {
+            validatedResponse.total_amount = (-amount).toString();
+            console.log(`🔧 Corrected amount from ${amount} to -${amount}`);
+          }
+
+          // Ensure notes include "חשבונית זיכוי"
+          const notes = validatedResponse.notes || '';
+          if (!notes.includes('חשבונית זיכוי')) {
+            validatedResponse.notes = notes ? `${notes} | חשבונית זיכוי` : 'חשבונית זיכוי';
+            console.log('🔧 Added "חשבונית זיכוי" to notes');
           }
         }
 

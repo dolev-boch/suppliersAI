@@ -64,6 +64,15 @@ function doPost(e) {
     const sheetName = sheetInfo.sheet.getName();
     Logger.log(`📋 Target sheet: ${sheetName}`);
 
+    // Check for duplicate invoice
+    if (data.document_number && (data.document_type === 'invoice' || data.document_type === 'credit_invoice')) {
+      const duplicate = checkDuplicateInvoice(sheetInfo.sheet, data.document_number, sheetInfo.useSpecialColumns);
+      if (duplicate) {
+        Logger.log(`⚠️ Duplicate invoice detected: ${data.document_number}`);
+        return createResponse(false, `חשבונית ${data.document_number} כבר קיימת במערכת (שורה ${duplicate.row}, תאריך ${duplicate.date})`);
+      }
+    }
+
     // Check if this is שונות sheet
     const isOtherCategory = sheetName === SHEET_NAMES.other;
 
@@ -155,6 +164,44 @@ function sendProductsToTracking(data) {
     Logger.log('❌ Error sending products to tracking: ' + error.toString());
     Logger.log('   Stack: ' + error.stack);
     // Don't fail the main invoice processing if product tracking fails
+  }
+}
+
+/**
+ * Check if invoice number already exists in the sheet
+ * @param {Sheet} sheet - The target sheet
+ * @param {string} invoiceNumber - The invoice number to check
+ * @param {boolean} useSpecialColumns - Whether using special column mapping
+ * @return {object|null} - Returns {row, date} if duplicate found, null otherwise
+ */
+function checkDuplicateInvoice(sheet, invoiceNumber, useSpecialColumns) {
+  try {
+    const columns = useSpecialColumns ? SPECIAL_COLUMNS : REGULAR_COLUMNS;
+    const lastRow = sheet.getLastRow();
+
+    // Search from DATA_START_ROW to last row
+    for (let row = DATA_START_ROW; row <= lastRow; row++) {
+      const existingInvoiceNum = sheet.getRange(row, columns.INVOICE_NUM).getValue();
+
+      // Check if invoice number matches (convert to string for comparison)
+      if (existingInvoiceNum && String(existingInvoiceNum) === String(invoiceNumber)) {
+        const existingDate = sheet.getRange(row, columns.DATE).getValue();
+        const formattedDate = existingDate ? Utilities.formatDate(new Date(existingDate), Session.getScriptTimeZone(), 'dd/MM/yyyy') : 'לא ידוע';
+
+        Logger.log(`📍 Duplicate found at row ${row}: Invoice ${invoiceNumber}, Date ${formattedDate}`);
+        return {
+          row: row,
+          date: formattedDate
+        };
+      }
+    }
+
+    // No duplicate found
+    return null;
+  } catch (error) {
+    Logger.log('❌ Error checking for duplicates: ' + error.toString());
+    // Don't block on error, return null to allow processing
+    return null;
   }
 }
 
@@ -344,7 +391,8 @@ function shiftDataDown(sheet, startRow, columns, useSpecialColumns) {
  */
 function writeRowData(sheet, targetRow, columns, data, useSpecialColumns) {
   const isDeliveryNote = data.document_type === 'delivery_note';
-  const isInvoice = data.document_type === 'invoice';
+  const isInvoice = data.document_type === 'invoice' || data.document_type === 'credit_invoice';
+  const isCreditInvoice = data.document_type === 'credit_invoice';
 
   // Date
   if (data.document_date) {
@@ -366,13 +414,20 @@ function writeRowData(sheet, targetRow, columns, data, useSpecialColumns) {
     sheet.getRange(targetRow, columns.DELIVERY_SUM).setValue(amount);
   }
 
-  // Invoice
+  // Invoice or Credit Invoice
   if (isInvoice && data.document_number) {
     sheet.getRange(targetRow, columns.INVOICE_NUM).setValue(data.document_number);
   }
   if (isInvoice && data.total_amount) {
     const amount = parseAmount(data.total_amount);
+    // For credit invoices, amount should already be negative from AI
     sheet.getRange(targetRow, columns.INVOICE_SUM).setValue(amount);
+
+    if (isCreditInvoice && amount > 0) {
+      // Safety check: if AI didn't make it negative, do it now
+      Logger.log('⚠️ Credit invoice had positive amount, converting to negative');
+      sheet.getRange(targetRow, columns.INVOICE_SUM).setValue(-amount);
+    }
   }
 
   // Notes
