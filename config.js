@@ -3,7 +3,7 @@ const CONFIG = {
   // Gemini API Configuration
   // API key is loaded from Vercel serverless function
   GEMINI_API_KEY: '', // Loaded dynamically
-  GEMINI_MODEL: 'gemini-2.0-flash-lite',
+  GEMINI_MODEL: 'gemini-2.5-flash-lite',
   GEMINI_API_URL: 'https://generativelanguage.googleapis.com/v1beta/models',
 
   // Generation settings
