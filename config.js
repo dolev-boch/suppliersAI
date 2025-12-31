@@ -30,7 +30,7 @@ const CONFIG = {
     // ✅ ADD THIS - Products tracking script URL
     // You MUST deploy products-tracking.gs as a web app and paste the URL here
     productsScriptUrl:
-      'https://script.google.com/macros/s/AKfycbyCc6WjeypUS_Vz-8_FqUJfIb8vVE-ZwBMwjcsy9Bl9H5Cuawyu0uCBRPwICWoymMLP/exec', // ← DEPLOY products-tracking.gs AND PASTE URL HERE
+      'https://script.google.com/macros/s/AKfycbxj_aEc1fE9Kk_v-eydieiQq9B3RABwfY5gnJIvXcCiJ3WdoV-yyWCgdcBXNFvU9FLg/exec', // ← DEPLOY products-tracking.gs AND PASTE URL HERE
     productsSheetId: '1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ', // Product tracking spreadsheet
   },
 

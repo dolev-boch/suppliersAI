@@ -1025,13 +1025,33 @@ class InvoiceScanner {
       return;
     }
 
+    // Filter out products with zero or invalid prices
+    const validProducts = result.products.filter((product) => {
+      const price = parseFloat(product.unit_price_before_vat);
+      return !isNaN(price) && price > 0;
+    });
+
+    if (validProducts.length === 0) {
+      console.log('ℹ️ No products with valid prices to send');
+      return;
+    }
+
+    // Log filtered products if any were removed
+    if (validProducts.length < result.products.length) {
+      console.log(
+        `⚠️ Filtered out ${
+          result.products.length - validProducts.length
+        } products with zero/invalid prices`
+      );
+    }
+
     const productsData = {
       supplier_name: result.supplier_name,
       document_date: result.document_date,
-      products: result.products, // Array of products with prices
+      products: validProducts, // Only send products with valid prices > 0
     };
 
-    console.log(`📦 Sending ${result.products.length} products to tracking sheet:`, productsData);
+    console.log(`📦 Sending ${validProducts.length} products to tracking sheet:`, productsData);
 
     try {
       await fetch(CONFIG.SHEETS_CONFIG.productsScriptUrl, {
