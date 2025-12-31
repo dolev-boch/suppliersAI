@@ -24,7 +24,7 @@ const CONFIG = {
   // Google Sheets Configuration
   SHEETS_CONFIG: {
     scriptUrl:
-      'https://script.google.com/macros/s/AKfycbz5_dNx0oPvIXY4OiVyjs4NPoUQ6HmZr2TFvUaTeYvnKnNP2MzoNoLGxkOpa1n7TbJseg/exec', // Invoice summaries script URL
+      'https://script.google.com/macros/s/AKfycbx1uSpg4raD-0ycuYHPFoG9fxoqkZM0P7u_PRVWlcXq6nzSoHAytYC0meJNXIblwtaOHg/exec', // Invoice summaries script URL
     sheetId: '1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM', // Invoice summaries spreadsheet
     productsSheetId: '1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ', // Product tracking spreadsheet
   },
