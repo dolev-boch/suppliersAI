@@ -24,15 +24,17 @@ const GeminiService = {
       try {
         if (attempt > 0) {
           const delay = RETRY_DELAYS[attempt - 1];
-          const message = `ממתין ${Math.round(delay/1000)} שניות לפני ניסיון ${attempt + 1}...`;
+          const message = `ממתין ${Math.round(delay / 1000)} שניות לפני ניסיון ${attempt + 1}...`;
           console.log(`⏳ ${message}`);
           if (onProgress) onProgress({ status: 'retrying', attempt, message });
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await new Promise((resolve) => setTimeout(resolve, delay));
         }
 
-        const message = attempt === 0 ? 'מנתח חשבונית...' : `ניסיון ${attempt + 1} מתוך ${MAX_RETRIES}...`;
+        const message =
+          attempt === 0 ? 'מנתח חשבונית...' : `ניסיון ${attempt + 1} מתוך ${MAX_RETRIES}...`;
         console.log(`🚀 ${message}`);
-        if (onProgress) onProgress({ status: 'analyzing', attempt: attempt + 1, total: MAX_RETRIES, message });
+        if (onProgress)
+          onProgress({ status: 'analyzing', attempt: attempt + 1, total: MAX_RETRIES, message });
 
         const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
@@ -57,7 +59,12 @@ const GeminiService = {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           console.log(`⏰ Timeout after 15 seconds - aborting attempt ${attempt + 1}...`);
-          if (onProgress) onProgress({ status: 'timeout', attempt: attempt + 1, message: 'זמן התגובה פג - מנסה שוב...' });
+          if (onProgress)
+            onProgress({
+              status: 'timeout',
+              attempt: attempt + 1,
+              message: 'זמן התגובה פג - מנסה שוב...',
+            });
           controller.abort();
         }, TIMEOUT_MS);
 
@@ -119,7 +126,12 @@ const GeminiService = {
           const validated = this.validateResponse(parsed);
 
           console.log(`✅ Request succeeded on attempt ${attempt + 1}`);
-          if (onProgress) onProgress({ status: 'success', attempt: attempt + 1, message: 'החשבונית נותחה בהצלחה!' });
+          if (onProgress)
+            onProgress({
+              status: 'success',
+              attempt: attempt + 1,
+              message: 'החשבונית נותחה בהצלחה!',
+            });
 
           return {
             ...validated,
@@ -149,7 +161,11 @@ const GeminiService = {
         // If this was the last attempt, throw
         if (attempt === MAX_RETRIES - 1) {
           console.error(`❌ All ${MAX_RETRIES} attempts failed`);
-          if (onProgress) onProgress({ status: 'failed', message: `כל ${MAX_RETRIES} הניסיונות נכשלו. נא לרענן ולנסות שוב.` });
+          if (onProgress)
+            onProgress({
+              status: 'failed',
+              message: `כל ${MAX_RETRIES} הניסיונות נכשלו. נא לרענן ולנסות שוב.`,
+            });
           throw new Error(`Failed after ${MAX_RETRIES} attempts. Last error: ${error.message}`);
         }
 
@@ -385,11 +401,34 @@ const GeminiService = {
   /**
    * Validate and categorize AI response
    */
+  /**
+   * Validate and categorize AI response
+   */
   validateResponse(response) {
     console.log('Validating AI response:', response);
 
     const supplierName = response.supplier_name || '';
     const supplierCategory = response.supplier_category || '';
+
+    // 🚨🚨🚨 CRITICAL: Handle credit invoices FIRST (before any other validation)
+    // This ensures credit invoices are properly handled regardless of supplier category
+    if (response.document_type === 'credit_invoice') {
+      console.log('💳 Credit invoice detected - ensuring negative amount and note');
+
+      // Ensure amount is negative
+      const amount = parseFloat(response.total_amount);
+      if (!isNaN(amount) && amount > 0) {
+        response.total_amount = (-amount).toString();
+        console.log(`🔧 Corrected amount from ${amount} to -${amount}`);
+      }
+
+      // Ensure notes include "חשבונית זיכוי"
+      const notes = response.notes || '';
+      if (!notes.includes('חשבונית זיכוי')) {
+        response.notes = notes ? `${notes} | חשבונית זיכוי` : 'חשבונית זיכוי';
+        console.log('🔧 Added "חשבונית זיכוי" to notes');
+      }
+    }
 
     // Validate priority supplier match
     const priorityMatch = SupplierMatcher.findPriorityMatch(supplierName);
@@ -430,28 +469,12 @@ const GeminiService = {
           }
 
           // Rule 2: Supermarkets MUST have credit card (warn if missing)
-          if (!validatedResponse.credit_card_last4 || validatedResponse.credit_card_last4 === 'null') {
+          if (
+            !validatedResponse.credit_card_last4 ||
+            validatedResponse.credit_card_last4 === 'null'
+          ) {
             console.warn('⚠️ WARNING: Supermarket missing credit card - this should not happen!');
             // Don't block, but log prominently
-          }
-        }
-
-        // CRITICAL: Handle credit invoices (חשבונית זיכוי)
-        if (validatedResponse.document_type === 'credit_invoice') {
-          console.log('💳 Credit invoice detected - ensuring negative amount and note');
-
-          // Ensure amount is negative
-          const amount = parseFloat(validatedResponse.total_amount);
-          if (!isNaN(amount) && amount > 0) {
-            validatedResponse.total_amount = (-amount).toString();
-            console.log(`🔧 Corrected amount from ${amount} to -${amount}`);
-          }
-
-          // Ensure notes include "חשבונית זיכוי"
-          const notes = validatedResponse.notes || '';
-          if (!notes.includes('חשבונית זיכוי')) {
-            validatedResponse.notes = notes ? `${notes} | חשבונית זיכוי` : 'חשבונית זיכוי';
-            console.log('🔧 Added "חשבונית זיכוי" to notes');
           }
         }
 
