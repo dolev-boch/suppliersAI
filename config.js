@@ -1,5 +1,5 @@
 // Configuration for Zuza Patisserie Invoice Scanner
-// ✅ FIXED VERSION - Increased token limits for large invoices
+// ✅ COMPLETE VERSION - All required properties for app.js
 
 const CONFIG = {
   // Gemini API Configuration
@@ -7,7 +7,7 @@ const CONFIG = {
   GEMINI_MODEL: 'gemini-1.5-flash', // Fast and efficient for free tier
   GEMINI_API_KEY: '', // Will be loaded from /api/config endpoint
 
-  // ✅ FIX: Generation Configuration with increased token limits
+  // ✅ Generation Configuration with INCREASED token limits
   GENERATION_CONFIG: {
     temperature: 0.1, // Low temperature for consistent, accurate results
     topK: 32,
@@ -30,16 +30,29 @@ const CONFIG = {
     productsSheetId: '1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ',
   },
 
+  // ✅ Storage Keys (required by app.js)
+  STORAGE_KEYS: {
+    DAILY_TOKENS: 'zuza_daily_tokens',
+    TOKEN_DATE: 'zuza_token_date',
+  },
+
+  // ✅ Token Limits (required by app.js)
+  TOKEN_LIMITS: {
+    DAILY_TOKENS: 50000, // Conservative daily token budget
+    WARNING_THRESHOLD: 40000, // Warn when approaching limit
+  },
+
+  // ✅ Confidence Thresholds (required by app.js)
+  CONFIDENCE_THRESHOLDS: {
+    HIGH: 90,
+    MEDIUM: 75,
+    LOW: 60,
+  },
+
   // Rate Limiting (for free tier)
   RATE_LIMITS: {
     requestsPerMinute: 15, // Gemini free tier limit
     requestsPerDay: 1500, // Daily limit
-  },
-
-  // Token Limits (for free tier monitoring)
-  TOKEN_LIMITS: {
-    dailyLimit: 50000, // Conservative daily token budget
-    warningThreshold: 40000, // Warn when approaching limit
   },
 };
 
@@ -52,6 +65,7 @@ async function loadApiKey() {
     console.log('✅ API key loaded successfully');
   } catch (error) {
     console.error('❌ Failed to load API key:', error);
+    // Don't throw - allow app to load and show error when user tries to scan
   }
 }
 
