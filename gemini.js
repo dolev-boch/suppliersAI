@@ -17,7 +17,7 @@ const GeminiService = {
    */
   async performAnalysis(base64Image, onProgress = null) {
     const MAX_RETRIES = 5;
-    const TIMEOUT_MS = 15000; // 15 seconds - user doesn't want to wait longer
+    const TIMEOUT_MS = 30000; // 30 seconds - increased for complex invoices
     const RETRY_DELAYS = [500, 1000, 2000, 3000]; // Faster retries
 
     let lastError = null;
@@ -68,7 +68,7 @@ const GeminiService = {
         // Create abort controller for timeout
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
-          console.log(`⏰ Timeout after 15 seconds - aborting attempt ${attempt + 1}...`);
+          console.log(`⏰ Timeout after ${TIMEOUT_MS / 1000} seconds - aborting attempt ${attempt + 1}...`);
           if (onProgress)
             onProgress({
               status: 'timeout',
@@ -228,7 +228,7 @@ const GeminiService = {
 
           // Handle timeout
           if (fetchError.name === 'AbortError') {
-            throw new Error(`Request timed out after 15 seconds (attempt ${attempt + 1})`);
+            throw new Error(`Request timed out after ${TIMEOUT_MS / 1000} seconds (attempt ${attempt + 1})`);
           }
 
           throw fetchError;
