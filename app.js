@@ -1223,64 +1223,6 @@ class InvoiceScanner {
       this.elements.approveAndSendBtn.textContent = this.editMode ? 'שמור ושלח' : 'אישור ושליחה';
     }
   }
-
-  /**
-   * Reset UI for new scan after successful submission
-   */
-  /**
-   * Reset UI for new scan after successful submission
-   */
-  resetForNewScan() {
-    // Clear current results
-    this.currentResult = null;
-    this.editedData = {};
-    this.imageBase64 = null;
-    this.selectedFile = null;
-
-    // Hide results section
-    this.elements.resultsSection.style.display = 'none';
-
-    // Hide and clear preview container
-    this.elements.previewContainer.style.display = 'none';
-    this.elements.previewImage.src = '';
-
-    // Reset and show process button (disabled until new image selected)
-    this.elements.processBtn.disabled = true;
-    this.elements.processBtn.style.display = 'block';
-
-    // Show upload zone
-    this.elements.uploadZone.style.display = 'block';
-
-    // Show bulk upload section
-    if (this.elements.bulkUploadSection) {
-      this.elements.bulkUploadSection.style.display = 'block';
-    }
-
-    // Hide bulk processing state if visible
-    if (this.elements.bulkProcessingState) {
-      this.elements.bulkProcessingState.style.display = 'none';
-    }
-
-    // Clear file input
-    if (this.elements.fileInput) {
-      this.elements.fileInput.value = '';
-    }
-
-    // Clear bulk file input
-    if (this.elements.bulkFileInput) {
-      this.elements.bulkFileInput.value = '';
-    }
-
-    // Hide usage section
-    if (this.elements.usageSection) {
-      this.elements.usageSection.style.display = 'none';
-    }
-
-    // Show ready status
-    this.showStatus('מוכן לסריקת חשבונית חדשה 📄', 'success');
-
-    console.log('✅ UI reset for new scan');
-  }
 }
 
 // Initialize application when DOM is ready
