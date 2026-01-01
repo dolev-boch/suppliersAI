@@ -1,20 +1,28 @@
 // Configuration for Zuza Patisserie Invoice Scanner
-// ✅ COMPLETE VERSION - All required properties for app.js
+// ✅ UPDATED FOR 2026 - Correct Gemini model names
 
 const CONFIG = {
-  // Gemini API Configuration
+  // ✅ Gemini API Configuration - UPDATED FOR 2026
   GEMINI_API_URL: 'https://generativelanguage.googleapis.com/v1beta/models',
-  GEMINI_MODEL: 'gemini-1.5-flash', // Fast and efficient for free tier
+
+  // ✅ UPDATED: Use Gemini 2.5 Flash (best balance of speed, cost, and quality)
+  // Options as of January 2026:
+  // - 'gemini-2.5-flash' (recommended - best price/performance)
+  // - 'gemini-2.5-flash-lite' (cheaper, faster, less capable)
+  // - 'gemini-2.5-pro' (most capable, slower, more expensive)
+  // - 'gemini-3-flash-preview' (experimental, latest features)
+  GEMINI_MODEL: 'gemini-2.5-flash',
+
   GEMINI_API_KEY: '', // Will be loaded from /api/config endpoint
 
-  // ✅ Generation Configuration with INCREASED token limits
+  // ✅ Generation Configuration - Optimized for invoice scanning
   GENERATION_CONFIG: {
-    temperature: 0.1, // Low temperature for consistent, accurate results
+    temperature: 0.1, // Low for consistent, factual extraction
     topK: 32,
     topP: 0.95,
-    maxOutputTokens: 8192, // ✅ INCREASED from 2048 to 8192
-    // Note: Gemini 1.5 Flash supports up to 8192 output tokens
-    // This handles large invoices with many products without truncation
+    maxOutputTokens: 8192, // ✅ INCREASED from 2048 - handles large invoices
+    // Gemini 2.5 Flash supports up to 8192 output tokens
+    // This prevents JSON truncation on invoices with many products
   },
 
   // Google Sheets Configuration
@@ -30,29 +38,29 @@ const CONFIG = {
     productsSheetId: '1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ',
   },
 
-  // ✅ Storage Keys (required by app.js)
+  // Storage Keys (required by app.js)
   STORAGE_KEYS: {
     DAILY_TOKENS: 'zuza_daily_tokens',
     TOKEN_DATE: 'zuza_token_date',
   },
 
-  // ✅ Token Limits (required by app.js)
+  // Token Limits (for free tier monitoring)
   TOKEN_LIMITS: {
-    DAILY_TOKENS: 50000, // Conservative daily token budget
-    WARNING_THRESHOLD: 40000, // Warn when approaching limit
+    DAILY_TOKENS: 50000, // Conservative daily budget
+    WARNING_THRESHOLD: 40000, // Warn at 80%
   },
 
-  // ✅ Confidence Thresholds (required by app.js)
+  // Confidence Thresholds (required by app.js)
   CONFIDENCE_THRESHOLDS: {
     HIGH: 90,
     MEDIUM: 75,
     LOW: 60,
   },
 
-  // Rate Limiting (for free tier)
+  // Rate Limiting (Gemini 2.5 Flash free tier)
   RATE_LIMITS: {
-    requestsPerMinute: 15, // Gemini free tier limit
-    requestsPerDay: 1500, // Daily limit
+    requestsPerMinute: 15, // Free tier limit
+    requestsPerDay: 1500, // Free tier limit
   },
 };
 
@@ -63,6 +71,7 @@ async function loadApiKey() {
     const config = await response.json();
     CONFIG.GEMINI_API_KEY = config.GEMINI_API_KEY;
     console.log('✅ API key loaded successfully');
+    console.log(`✅ Using model: ${CONFIG.GEMINI_MODEL}`);
   } catch (error) {
     console.error('❌ Failed to load API key:', error);
     // Don't throw - allow app to load and show error when user tries to scan

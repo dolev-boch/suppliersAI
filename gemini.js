@@ -26,15 +26,17 @@ const GeminiService = {
       try {
         if (attempt > 0) {
           const delay = RETRY_DELAYS[attempt - 1];
-          const message = `ממתין ${Math.round(delay/1000)} שניות לפני ניסיון ${attempt + 1}...`;
+          const message = `ממתין ${Math.round(delay / 1000)} שניות לפני ניסיון ${attempt + 1}...`;
           console.log(`⏳ ${message}`);
           if (onProgress) onProgress({ status: 'retrying', attempt, message });
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await new Promise((resolve) => setTimeout(resolve, delay));
         }
 
-        const message = attempt === 0 ? 'מנתח חשבונית...' : `ניסיון ${attempt + 1} מתוך ${MAX_RETRIES}...`;
+        const message =
+          attempt === 0 ? 'מנתח חשבונית...' : `ניסיון ${attempt + 1} מתוך ${MAX_RETRIES}...`;
         console.log(`🚀 ${message}`);
-        if (onProgress) onProgress({ status: 'analyzing', attempt: attempt + 1, total: MAX_RETRIES, message });
+        if (onProgress)
+          onProgress({ status: 'analyzing', attempt: attempt + 1, total: MAX_RETRIES, message });
 
         const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
@@ -43,7 +45,7 @@ const GeminiService = {
           temperature: CONFIG.GENERATION_CONFIG?.temperature || 0.1,
           topK: CONFIG.GENERATION_CONFIG?.topK || 32,
           topP: CONFIG.GENERATION_CONFIG?.topP || 0.95,
-          maxOutputTokens: 8192,  // ✅ INCREASED from 2048 to 8192 for large invoices
+          maxOutputTokens: 8192, // ✅ INCREASED from 2048 to 8192 for large invoices
         };
 
         const requestBody = {
@@ -67,7 +69,12 @@ const GeminiService = {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           console.log(`⏰ Timeout after 15 seconds - aborting attempt ${attempt + 1}...`);
-          if (onProgress) onProgress({ status: 'timeout', attempt: attempt + 1, message: 'זמן התגובה פג - מנסה שוב...' });
+          if (onProgress)
+            onProgress({
+              status: 'timeout',
+              attempt: attempt + 1,
+              message: 'זמן התגובה פג - מנסה שוב...',
+            });
           controller.abort();
         }, TIMEOUT_MS);
 
@@ -105,14 +112,14 @@ const GeminiService = {
 
           // ✅ FIX #2: Improved JSON extraction with repair logic
           let jsonText = text.trim();
-          
+
           // Remove markdown code fences if present
           if (jsonText.startsWith('```json')) {
             jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*$/g, '');
           } else if (jsonText.startsWith('```')) {
             jsonText = jsonText.replace(/```\s*/g, '').replace(/```\s*$/g, '');
           }
-          
+
           // Extract JSON using regex as fallback
           const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
@@ -122,7 +129,7 @@ const GeminiService = {
           // ✅ FIX #2b: Repair truncated JSON
           if (!jsonText.trim().endsWith('}')) {
             console.warn('⚠️ JSON appears truncated, attempting repair...');
-            
+
             // Find last complete product object
             const lastCompleteProduct = jsonText.lastIndexOf('},');
             if (lastCompleteProduct !== -1) {
@@ -168,12 +175,12 @@ const GeminiService = {
           // ✅ FIX #3: Deduplicate and limit products
           if (parsed.products && parsed.products.length > 0) {
             const originalCount = parsed.products.length;
-            
+
             // Deduplicate identical products by consolidating quantities
             const productMap = new Map();
-            parsed.products.forEach(product => {
+            parsed.products.forEach((product) => {
               const key = this.normalizeProductName(product.name);
-              
+
               if (productMap.has(key)) {
                 // Product exists - add quantities
                 const existing = productMap.get(key);
@@ -184,14 +191,16 @@ const GeminiService = {
                 productMap.set(key, { ...product });
               }
             });
-            
+
             // Replace products array with deduplicated version
             parsed.products = Array.from(productMap.values());
-            
+
             if (originalCount !== parsed.products.length) {
-              console.log(`✅ Products deduplicated: ${originalCount} → ${parsed.products.length} unique products`);
+              console.log(
+                `✅ Products deduplicated: ${originalCount} → ${parsed.products.length} unique products`
+              );
             }
-            
+
             // Limit to max 100 products to prevent huge responses
             if (parsed.products.length > 100) {
               console.warn(`⚠️ Too many products (${parsed.products.length}), limiting to 100`);
@@ -203,7 +212,12 @@ const GeminiService = {
           const validated = this.validateResponse(parsed);
 
           console.log(`✅ Request succeeded on attempt ${attempt + 1}`);
-          if (onProgress) onProgress({ status: 'success', attempt: attempt + 1, message: 'החשבונית נותחה בהצלחה!' });
+          if (onProgress)
+            onProgress({
+              status: 'success',
+              attempt: attempt + 1,
+              message: 'החשבונית נותחה בהצלחה!',
+            });
 
           return {
             ...validated,
@@ -233,7 +247,11 @@ const GeminiService = {
         // If this was the last attempt, throw
         if (attempt === MAX_RETRIES - 1) {
           console.error(`❌ All ${MAX_RETRIES} attempts failed`);
-          if (onProgress) onProgress({ status: 'failed', message: `כל ${MAX_RETRIES} הניסיונות נכשלו. נא לרענן ולנסות שוב.` });
+          if (onProgress)
+            onProgress({
+              status: 'failed',
+              message: `כל ${MAX_RETRIES} הניסיונות נכשלו. נא לרענן ולנסות שוב.`,
+            });
           throw new Error(`Failed after ${MAX_RETRIES} attempts. Last error: ${error.message}`);
         }
 
@@ -533,7 +551,10 @@ const GeminiService = {
           }
 
           // Rule 2: Supermarkets MUST have credit card (warn if missing)
-          if (!validatedResponse.credit_card_last4 || validatedResponse.credit_card_last4 === 'null') {
+          if (
+            !validatedResponse.credit_card_last4 ||
+            validatedResponse.credit_card_last4 === 'null'
+          ) {
             console.warn('⚠️ WARNING: Supermarket missing credit card - this should not happen!');
             // Don't block, but log prominently
           }
