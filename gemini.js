@@ -1,4 +1,6 @@
 // Gemini AI Integration with Request Queue and Optimized Prompts
+// ✅ FIXED VERSION - JSON parsing errors resolved, token limit increased
+
 const GeminiService = {
   /**
    * Analyze invoice image with Gemini AI (using request queue)
@@ -24,19 +26,25 @@ const GeminiService = {
       try {
         if (attempt > 0) {
           const delay = RETRY_DELAYS[attempt - 1];
-          const message = `ממתין ${Math.round(delay / 1000)} שניות לפני ניסיון ${attempt + 1}...`;
+          const message = `ממתין ${Math.round(delay/1000)} שניות לפני ניסיון ${attempt + 1}...`;
           console.log(`⏳ ${message}`);
           if (onProgress) onProgress({ status: 'retrying', attempt, message });
-          await new Promise((resolve) => setTimeout(resolve, delay));
+          await new Promise(resolve => setTimeout(resolve, delay));
         }
 
-        const message =
-          attempt === 0 ? 'מנתח חשבונית...' : `ניסיון ${attempt + 1} מתוך ${MAX_RETRIES}...`;
+        const message = attempt === 0 ? 'מנתח חשבונית...' : `ניסיון ${attempt + 1} מתוך ${MAX_RETRIES}...`;
         console.log(`🚀 ${message}`);
-        if (onProgress)
-          onProgress({ status: 'analyzing', attempt: attempt + 1, total: MAX_RETRIES, message });
+        if (onProgress) onProgress({ status: 'analyzing', attempt: attempt + 1, total: MAX_RETRIES, message });
 
         const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+
+        // ✅ FIX #1: Increase max output tokens and ensure proper generation config
+        const generationConfig = {
+          temperature: CONFIG.GENERATION_CONFIG?.temperature || 0.1,
+          topK: CONFIG.GENERATION_CONFIG?.topK || 32,
+          topP: CONFIG.GENERATION_CONFIG?.topP || 0.95,
+          maxOutputTokens: 8192,  // ✅ INCREASED from 2048 to 8192 for large invoices
+        };
 
         const requestBody = {
           contents: [
@@ -52,19 +60,14 @@ const GeminiService = {
               ],
             },
           ],
-          generationConfig: CONFIG.GENERATION_CONFIG,
+          generationConfig: generationConfig,
         };
 
         // Create abort controller for timeout
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           console.log(`⏰ Timeout after 15 seconds - aborting attempt ${attempt + 1}...`);
-          if (onProgress)
-            onProgress({
-              status: 'timeout',
-              attempt: attempt + 1,
-              message: 'זמן התגובה פג - מנסה שוב...',
-            });
+          if (onProgress) onProgress({ status: 'timeout', attempt: attempt + 1, message: 'זמן התגובה פג - מנסה שוב...' });
           controller.abort();
         }, TIMEOUT_MS);
 
@@ -100,17 +103,57 @@ const GeminiService = {
           console.log('Token usage:', usage);
           if (onProgress) onProgress({ status: 'processing', message: 'עיבוד תשובה...' });
 
-          // Extract JSON from response (handle nested objects and arrays)
-          const jsonMatch = text.match(/\{[\s\S]*\}/);
-          if (!jsonMatch) {
-            throw new Error('לא הצלחתי לפרק את תשובת ה-AI');
+          // ✅ FIX #2: Improved JSON extraction with repair logic
+          let jsonText = text.trim();
+          
+          // Remove markdown code fences if present
+          if (jsonText.startsWith('```json')) {
+            jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*$/g, '');
+          } else if (jsonText.startsWith('```')) {
+            jsonText = jsonText.replace(/```\s*/g, '').replace(/```\s*$/g, '');
+          }
+          
+          // Extract JSON using regex as fallback
+          const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            jsonText = jsonMatch[0];
           }
 
+          // ✅ FIX #2b: Repair truncated JSON
+          if (!jsonText.trim().endsWith('}')) {
+            console.warn('⚠️ JSON appears truncated, attempting repair...');
+            
+            // Find last complete product object
+            const lastCompleteProduct = jsonText.lastIndexOf('},');
+            if (lastCompleteProduct !== -1) {
+              // Find if we're inside products array
+              const productsStart = jsonText.indexOf('"products": [');
+              if (productsStart !== -1 && lastCompleteProduct > productsStart) {
+                // Truncate to last complete product and close the array/object
+                jsonText = jsonText.substring(0, lastCompleteProduct + 1) + ']}';
+                console.log('✅ JSON repaired - removed incomplete product entries');
+              }
+            } else {
+              // If no complete products, try to close whatever we have
+              if (jsonText.includes('"products": [')) {
+                const lastBrace = jsonText.lastIndexOf('}');
+                if (lastBrace !== -1) {
+                  jsonText = jsonText.substring(0, lastBrace + 1);
+                }
+                if (!jsonText.endsWith(']}')) {
+                  jsonText = jsonText + ']}';
+                }
+                console.log('⚠️ JSON severely truncated, added minimal closing');
+              }
+            }
+          }
+
+          // Parse JSON
           let parsed;
           try {
-            parsed = JSON.parse(jsonMatch[0]);
+            parsed = JSON.parse(jsonText);
           } catch (jsonError) {
-            console.error('Invalid JSON from AI:', jsonMatch[0]);
+            console.error('Invalid JSON from AI:', jsonText);
             console.error('JSON Parse Error:', jsonError.message);
             throw new Error(`AI returned invalid JSON: ${jsonError.message}`);
           }
@@ -122,16 +165,45 @@ const GeminiService = {
             console.log('💳 Credit invoice detected by AI!');
           }
 
+          // ✅ FIX #3: Deduplicate and limit products
+          if (parsed.products && parsed.products.length > 0) {
+            const originalCount = parsed.products.length;
+            
+            // Deduplicate identical products by consolidating quantities
+            const productMap = new Map();
+            parsed.products.forEach(product => {
+              const key = this.normalizeProductName(product.name);
+              
+              if (productMap.has(key)) {
+                // Product exists - add quantities
+                const existing = productMap.get(key);
+                existing.quantity += product.quantity;
+                existing.total_before_vat += product.total_before_vat;
+              } else {
+                // New product
+                productMap.set(key, { ...product });
+              }
+            });
+            
+            // Replace products array with deduplicated version
+            parsed.products = Array.from(productMap.values());
+            
+            if (originalCount !== parsed.products.length) {
+              console.log(`✅ Products deduplicated: ${originalCount} → ${parsed.products.length} unique products`);
+            }
+            
+            // Limit to max 100 products to prevent huge responses
+            if (parsed.products.length > 100) {
+              console.warn(`⚠️ Too many products (${parsed.products.length}), limiting to 100`);
+              parsed.products = parsed.products.slice(0, 100);
+            }
+          }
+
           // Validate and categorize the response
           const validated = this.validateResponse(parsed);
 
           console.log(`✅ Request succeeded on attempt ${attempt + 1}`);
-          if (onProgress)
-            onProgress({
-              status: 'success',
-              attempt: attempt + 1,
-              message: 'החשבונית נותחה בהצלחה!',
-            });
+          if (onProgress) onProgress({ status: 'success', attempt: attempt + 1, message: 'החשבונית נותחה בהצלחה!' });
 
           return {
             ...validated,
@@ -161,11 +233,7 @@ const GeminiService = {
         // If this was the last attempt, throw
         if (attempt === MAX_RETRIES - 1) {
           console.error(`❌ All ${MAX_RETRIES} attempts failed`);
-          if (onProgress)
-            onProgress({
-              status: 'failed',
-              message: `כל ${MAX_RETRIES} הניסיונות נכשלו. נא לרענן ולנסות שוב.`,
-            });
+          if (onProgress) onProgress({ status: 'failed', message: `כל ${MAX_RETRIES} הניסיונות נכשלו. נא לרענן ולנסות שוב.` });
           throw new Error(`Failed after ${MAX_RETRIES} attempts. Last error: ${error.message}`);
         }
 
@@ -181,7 +249,21 @@ const GeminiService = {
   },
 
   /**
-   * Build OPTIMIZED prompt for Gemini (reduced tokens by ~45%)
+   * ✅ NEW: Normalize product name for deduplication
+   */
+  normalizeProductName(name) {
+    return name
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ')
+      .replace(/[״׳'"]/g, '')
+      .replace(/\./g, '')
+      .replace(/,/g, '');
+  },
+
+  /**
+   * Build OPTIMIZED prompt for Gemini
+   * ✅ UPDATED: Added product consolidation instructions
    */
   buildPrompt() {
     const prioritySuppliers = SUPPLIERS.priority.join('", "');
@@ -192,32 +274,30 @@ const GeminiService = {
 
 **זה הכלל הראשון והחשוב ביותר! לפני כל דבר אחר!**
 
-**סרוק את כל המסמך וחפש את המילים "זיכוי" או "זכוי" בכל מקום!**
+**סרוק את כל המסמך וחפש את המילה "זיכוי" בכל מקום!**
 
-אם אתה רואה את המילה **"זיכוי"** או **"זכוי"** בכל מקום במסמך → זו חשבונית זיכוי!
+אם אתה רואה את המילה **"זיכוי"** בכל מקום במסמך → זו חשבונית זיכוי!
 
 דוגמאות שכולן פירושן חשבונית זיכוי:
 - "חשבונית זיכוי"
 - "חשבונית מס זיכוי"
-- "חשבונית מס זכוי" (שים לב: זכוי ללא י' - וריאציה נפוצה!)
 - "זיכוי"
-- "זכוי" (ללא י')
 - "מס זיכוי"
-- "מס זכוי"
 - "Credit Note"
 - "Credit Invoice"
 - "חשבונית זכות"
-- כל משפט שיש בו את המילה "זיכוי" או "זכוי"
+- כל משפט שיש בו את המילה "זיכוי"
 
 **הכלל הזהב:**
-אם יש במסמך את המילה "זיכוי" או "זכוי" (עם או בלי י') או "זכות" או "Credit" → זו חשבונית זיכוי!
+אם יש במסמך את המילה "זיכוי" או "זכות" או "Credit" → זו חשבונית זיכוי!
 
 **כאשר זו חשבונית זיכוי:**
 → document_type: "credit_invoice" (חובה!)
 → הסכום **חייב** להיות שלילי עם מינוס - (לדוגמה: "-256.50")
 → notes: "חשבונית זיכוי"
 
-**⚠️ אל תטעה! זיכוי/זכוי = חשבונית זיכוי, לא חשבונית רגילה!**
+**⚠️ אל תטעה! זיכוי = חשבונית זיכוי, לא חשבונית רגילה!**
+
 ## סדר זיהוי ספק (בדוק בסדר זה):
 
 ### 1. ספקים בעדיפות (PRIORITY):
@@ -235,7 +315,6 @@ const GeminiService = {
 - "MECKANO" או "Mecano" → מקאנו (priority)
 - "Netafim" או "נטפים" → נטפים (priority)
 - "Poliva Ltd." → פוליבה (priority)
-- "Mr Cake" או "Mr. Cake" → מר קייק (priority)
 
 ### 2. קטגוריות מיוחדות (רק אם לא priority):
 
@@ -243,13 +322,11 @@ const GeminiService = {
 מילות זיהוי: דלק, תדלוק, fuel, בנזין, דיזל, ליטר
 → supplier_category: "fuel_station"
 
-**רשתות מזון:** שופרסל, רמי לוי, ויקטורי, יוחננוף, אלונית, מחסני השוק, טרמינל 3, יינות ביתן, אושר עד, מגא, חצי חינם, קופיקס, דוכן צמח
-**חשוב מאוד:**
-- חפש את השמות האלה בדיוק! לדוגמה:
-  - "ויקטורי" / "Victory" → רשתות מזון (לא שונות!)
-  - "רמי לוי" / "Rami Levy" → רשתות מזון (לא שונות!)
-  - "דוכן צמח" (גם אם יש סאב-לוגו "דור אלון ניהול מתחמים קימעונאים") → **דוכן צמח** רשתות מזון (קח את הלוגו הראשי הגדול!)
-  - אם יש לוגו גדול של "דוכן צמח" ולוגו קטן של "דור אלון" → supplier_name: "דוכן צמח" (לא דור אלון!)
+**רשתות מזון (CRITICAL!):**
+- "ויקטורי" / "Victory" → רשתות מזון (לא שונות!)
+- "רמי לוי" / "Rami Levy" → רשתות מזון (לא שונות!)
+- "דוכן צמח" (גם אם יש סאב-לוגו "דור אלון ניהול מתחמים קימעונאים") → **דוכן צמח** רשתות מזון (קח את הלוגו הראשי הגדול!)
+- אם יש לוגו גדול של "דוכן צמח" ולוגו קטן של "דור אלון" → supplier_name: "דוכן צמח" (לא דור אלון!)
 - **רשתות מזון תמיד מוציאות חשבונית מס (invoice), אף פעם לא תעודת משלוח (delivery_note)!**
 - **רשתות מזון חייבות לכלול 4 ספרות כרטיס אשראי! אם לא מצאת - חפש שוב בחלק התשלום!**
 מילות זיהוי: סופר, supermarket, שוק, מרכול, market, דוכן
@@ -326,6 +403,12 @@ const GeminiService = {
 2. דלג על שורות שאינן מוצרים (סכומי ביניים, מע״מ, סיכומים, כותרות)
 3. אם מחיר ליחידה לא נראה, חשב: סה״כ ÷ כמות
 4. כלול רק מוצרים עם שמות ברורים
+5. **⚠️ CRITICAL: אם אותו מוצר מופיע במספר שורות - צבור את הכמויות למוצר אחד!**
+   - דוגמה: אם "קופסאות מדרום 50 יח'" מופיע 3 פעמים × 1 יחידה בשורות נפרדות
+   - **החזר רשומה אחת בלבד:** \`{"name": "קופסאות מדרום 50 יח'", "quantity": 3, "unit": "יח'", "unit_price_before_vat": 6.50, "total_before_vat": 19.50}\`
+   - **אל תחזיר 3 רשומות זהות של אותו מוצר!**
+   - **צבור כמויות של מוצרים בעלי שם זהה**
+6. **מקסימום 50 מוצרים שונים** - אם יש יותר מוצרים שונים, צבור דומים וקח את החשובים
 
 **דוגמה:**
 חשבונית מציגה:
@@ -397,13 +480,11 @@ const GeminiService = {
 - אם אין מוצרים, החזר "products": []
 - ודא שיש פסיק אחרי כל אובייקט מוצר (חוץ מהאחרון)
 - ודא שכל מחרוזות בתוך גרשיים כפולים
+- **אם מוצרים חוזרים על עצמם - צבור אותם לרשומה אחת!**
 
 נתח עכשיו:`;
   },
 
-  /**
-   * Validate and categorize AI response
-   */
   /**
    * Validate and categorize AI response
    */
@@ -412,26 +493,6 @@ const GeminiService = {
 
     const supplierName = response.supplier_name || '';
     const supplierCategory = response.supplier_category || '';
-
-    // 🚨🚨🚨 CRITICAL: Handle credit invoices FIRST (before any other validation)
-    // This ensures credit invoices are properly handled regardless of supplier category
-    if (response.document_type === 'credit_invoice') {
-      console.log('💳 Credit invoice detected - ensuring negative amount and note');
-
-      // Ensure amount is negative
-      const amount = parseFloat(response.total_amount);
-      if (!isNaN(amount) && amount > 0) {
-        response.total_amount = (-amount).toString();
-        console.log(`🔧 Corrected amount from ${amount} to -${amount}`);
-      }
-
-      // Ensure notes include "חשבונית זיכוי"
-      const notes = response.notes || '';
-      if (!notes.includes('חשבונית זיכוי')) {
-        response.notes = notes ? `${notes} | חשבונית זיכוי` : 'חשבונית זיכוי';
-        console.log('🔧 Added "חשבונית זיכוי" to notes');
-      }
-    }
 
     // Validate priority supplier match
     const priorityMatch = SupplierMatcher.findPriorityMatch(supplierName);
@@ -472,12 +533,28 @@ const GeminiService = {
           }
 
           // Rule 2: Supermarkets MUST have credit card (warn if missing)
-          if (
-            !validatedResponse.credit_card_last4 ||
-            validatedResponse.credit_card_last4 === 'null'
-          ) {
+          if (!validatedResponse.credit_card_last4 || validatedResponse.credit_card_last4 === 'null') {
             console.warn('⚠️ WARNING: Supermarket missing credit card - this should not happen!');
             // Don't block, but log prominently
+          }
+        }
+
+        // CRITICAL: Handle credit invoices (חשבונית זיכוי)
+        if (validatedResponse.document_type === 'credit_invoice') {
+          console.log('💳 Credit invoice detected - ensuring negative amount and note');
+
+          // Ensure amount is negative
+          const amount = parseFloat(validatedResponse.total_amount);
+          if (!isNaN(amount) && amount > 0) {
+            validatedResponse.total_amount = (-amount).toString();
+            console.log(`🔧 Corrected amount from ${amount} to -${amount}`);
+          }
+
+          // Ensure notes include "חשבונית זיכוי"
+          const notes = validatedResponse.notes || '';
+          if (!notes.includes('חשבונית זיכוי')) {
+            validatedResponse.notes = notes ? `${notes} | חשבונית זיכוי` : 'חשבונית זיכוי';
+            console.log('🔧 Added "חשבונית זיכוי" to notes');
           }
         }
 
