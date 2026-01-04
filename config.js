@@ -29,7 +29,7 @@ const CONFIG = {
   SHEETS_CONFIG: {
     // Invoice summaries sheet
     scriptUrl:
-      'https://script.google.com/macros/s/AKfycbxxE0147PXL5dbUZNmPHGPlpPefDF9mn2h1OAndpsnxGnq3Ey8OUEEJXCm87mBLwpKjfQ/exec',
+      'https://script.google.com/macros/s/AKfycbzonT-4pMi-_xM9f9XqI4h7FKzTfYUYVQOlt6Lp_9mlHFf4mp_CW0XAP-YsaU3UxVAi_g/exec',
     sheetId: '1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM',
 
     // Products tracking sheet
