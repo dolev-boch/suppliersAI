@@ -976,6 +976,8 @@ class InvoiceScanner {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         console.log(`Attempt ${attempt}/${maxRetries}: Sending to Google Sheets`);
+        console.log('Data being sent:', JSON.stringify(data, null, 2));
+        console.log('Script URL:', CONFIG.SHEETS_CONFIG.scriptUrl);
 
         await fetch(CONFIG.SHEETS_CONFIG.scriptUrl, {
           method: 'POST',
@@ -987,7 +989,7 @@ class InvoiceScanner {
         });
 
         // If fetch succeeds, return immediately
-        console.log(`✅ Successfully sent to Google Sheets on attempt ${attempt}`);
+        console.log(`✅ Successfully sent to Google Sheets (main invoice) on attempt ${attempt}`);
         return;
       } catch (error) {
         lastError = error;
