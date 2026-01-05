@@ -20,9 +20,9 @@ const CONFIG = {
     temperature: 0.1, // Low for consistent, factual extraction
     topK: 32,
     topP: 0.95,
-    maxOutputTokens: 6144, // ✅ Balanced: 6144 tokens for large invoices, saves ~1k vs 8192
+    maxOutputTokens: 8192, // ✅ Maximum: needed for invoices with many products
     // Gemini 2.5 Flash supports up to 8192 output tokens
-    // 6144 handles invoices with ~40 products without truncation
+    // Don't reduce this - causes JSON truncation on large invoices
   },
 
   // Google Sheets Configuration

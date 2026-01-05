@@ -104,10 +104,20 @@ const GeminiService = {
 
           const data = await response.json();
           const usage = data.usageMetadata;
-          const text = data.candidates[0].content.parts[0].text;
+          const candidate = data.candidates[0];
+          const text = candidate.content.parts[0].text;
+          const finishReason = candidate.finishReason;
 
           console.log('✅ Gemini Response received');
           console.log('Token usage:', usage);
+          console.log('Finish reason:', finishReason);
+
+          // Check if response was truncated due to token limit
+          if (finishReason === 'MAX_TOKENS') {
+            console.error('❌ Response truncated due to MAX_TOKENS limit!');
+            console.error('   This invoice has too many products for current token limit');
+            throw new Error('Response truncated - invoice too large. Try scanning in parts or contact support.');
+          }
           if (onProgress) onProgress({ status: 'processing', message: 'עיבוד תשובה...' });
 
           // ✅ FIX #2: Improved JSON extraction with repair logic
@@ -335,27 +345,11 @@ const GeminiService = {
 - חשבונית זיכוי: "חשבונית זיכוי" + מספר ליד
 כלל זהב: קח מספר מיד אחרי כותרת (לא מספר אקראי), מלא (10-15 ספרות)
 
-**תאריך:**
-פורמט DD/MM/YYYY, שנה 2024-2025 בלבד (תאריך מסמך, לא תשלום עתידי)
-- דוגמאות שגויות: 15/12/20 (צריך 2020 או 2025), 15/12/2023 (ישן מדי)
+**תאריך:** DD/MM/YYYY, שנה 2024-2025
 
-**סכום:**
-- הסכום הכולל הסופי בשקלים
-- **אם חשבונית זיכוי:** הסכום חייב להיות **שלילי** (עם מינוס -), לדוגמה: "-256.50"
-- **אם חשבונית רגילה:** הסכום חיובי, לדוגמה: "256.50"
+**סכום:** זיכוי = שלילי ("-256.50"), רגיל = חיובי
 
-**כרטיס אשראי (קריטי!):**
-- **חובה לבדוק ולמצוא** עבור: תחנת דלק (fuel_station), רשתות מזון (supermarket), משתלות (nursery), שונות (other)
-- חפש בקפידה **4 ספרות אחרונות** של כרטיס אשראי בחלק התשלום של החשבונית
-- **איפה לחפש:** באזור פרטי התשלום, סוג תשלום, פירוט אמצעי תשלום
-- **פורמטים נפוצים:**
-  - "****1234" או "XXXX1234" → קח 1234
-  - "מספר כרטיס: 1234" → קח 1234
-  - "כרטיס אשראי 1234" → קח 1234
-  - חפש 4 ספרות ליד "אשראי", "כרטיס", "credit card"
-- אל תבלבל עם: מספר חשבונית, עסקה, אישור, טרמינל
-- ספקי priority → תמיד null
-- אם לא נמצא → null
+**כרטיס אשראי:** חובה עבור fuel_station/supermarket/nursery/other. חפש 4 ספרות ליד "אשראי"/"כרטיס". priority=null
 
 ## מוצרים (PRODUCTS):
 
@@ -431,8 +425,12 @@ const GeminiService = {
 ### 7. דלג על שורות שאינן מוצרים
 דלג על: סכומי ביניים, מע״מ, סיכומים, כותרות, שורות הנחה (הן חלק מהמוצר שלפניהן)
 
-### 8. מקסימום 40 מוצרים שונים
-אם יש יותר - צבור דומים וקח את החשובים (מגבלת JSON)
+### 8. מקסימום 30 מוצרים - חשוב מאוד!
+אם יש יותר מ-30 מוצרים:
+- צבור מוצרים דומים (אותו שם, מחירים דומים)
+- קח את המוצרים החשובים והיקרים
+- השמט מוצרים קטנים/זולים אם צריך
+- **מגבלת JSON - אסור ליותר מ-30!**
 
 ## JSON:
 {
