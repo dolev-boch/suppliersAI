@@ -9,10 +9,41 @@ class InvoiceScanner {
     this.editedData = {};
     this.dailyTokenCount = this.loadDailyTokenCount();
     this.loadingStartTime = null;
+    this.completionSound = this.createCompletionSound();
+    this.wakeLock = null; // Screen Wake Lock
 
     this.initializeElements();
     this.attachEventListeners();
     this.updateDailyTokenDisplay();
+  }
+
+  /**
+   * Create completion sound using Web Audio API
+   */
+  createCompletionSound() {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      return () => {
+        // Create a pleasant "ding" sound
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.frequency.value = 800; // High pitch
+        oscillator.type = 'sine';
+
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.5);
+      };
+    } catch (error) {
+      console.warn('Audio API not supported:', error);
+      return () => {}; // No-op if audio not supported
+    }
   }
 
   /**
@@ -272,6 +303,9 @@ class InvoiceScanner {
       // Stop progress updates
       this.stopLoadingProgress();
 
+      // Play completion sound
+      this.completionSound();
+
       // Check average confidence
       const avgConfidence = GeminiService.calculateAverageConfidence(result);
 
@@ -303,13 +337,35 @@ class InvoiceScanner {
   /**
    * Start loading progress updates
    */
-  startLoadingProgress() {
+  async startLoadingProgress() {
+    // Request wake lock to keep screen on during scan
+    try {
+      if ('wakeLock' in navigator) {
+        this.wakeLock = await navigator.wakeLock.request('screen');
+        console.log('✅ Screen wake lock activated');
+      }
+    } catch (err) {
+      console.warn('Wake Lock not supported or failed:', err);
+    }
+
+    // Calculate estimated time based on model
+    const modelName = CONFIG.GEMINI_MODEL || 'gemini-2.5-flash';
+    const isFlashLite = modelName.includes('lite');
+    const estimatedTime = isFlashLite ? 15 : 30; // Flash Lite: ~15s, Flash: ~30s
+
+    // Show initial message with time estimate
+    this.elements.loadingProgress.textContent = `זמן משוער: ${estimatedTime} שניות`;
+
     this.loadingInterval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - this.loadingStartTime) / 1000);
-      if (elapsed < 30) {
-        this.elements.loadingProgress.textContent = `עברו ${elapsed} שניות...`;
+      const remaining = Math.max(0, estimatedTime - elapsed);
+
+      if (elapsed < estimatedTime) {
+        this.elements.loadingProgress.textContent = `עברו ${elapsed} שניות | נותרו ~${remaining} שניות`;
+      } else if (elapsed < 50) {
+        this.elements.loadingProgress.textContent = `עברו ${elapsed} שניות | כמעט מוכן...`;
       } else {
-        this.elements.loadingProgress.textContent = 'זה לוקח יותר זמן מהרגיל...';
+        this.elements.loadingProgress.textContent = `עברו ${elapsed} שניות | מעבד...`;
       }
     }, 1000);
   }
@@ -323,6 +379,14 @@ class InvoiceScanner {
       this.loadingInterval = null;
     }
     this.elements.loadingProgress.textContent = '';
+
+    // Release wake lock
+    if (this.wakeLock) {
+      this.wakeLock.release().then(() => {
+        console.log('✅ Screen wake lock released');
+        this.wakeLock = null;
+      });
+    }
   }
 
   /**

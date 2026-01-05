@@ -17,7 +17,7 @@ const GeminiService = {
    */
   async performAnalysis(base64Image, onProgress = null) {
     const MAX_RETRIES = 5;
-    const TIMEOUT_MS = 30000; // 30 seconds - increased for complex invoices
+    const TIMEOUT_MS = 60000; // 60 seconds - adequate for regular Flash model
     const RETRY_DELAYS = [500, 1000, 2000, 3000]; // Faster retries
 
     let lastError = null;
