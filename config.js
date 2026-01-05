@@ -29,12 +29,12 @@ const CONFIG = {
   SHEETS_CONFIG: {
     // Invoice summaries sheet
     scriptUrl:
-      'https://script.google.com/macros/s/AKfycbyJejzfip2oth0JCI1EongITWKmmsVgS0jnA5TcRUZ_T-fkTWhtyZq_qo082H56hWczAg/exec',
+      'https://script.google.com/macros/s/AKfycbyMzMKj2bB8xMLD9UUFJdQiAPM1vF7xr_W7aD8_57XGJDSEadKdxv5kzRKHMYMcCyPWQg/exec',
     sheetId: '1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM',
 
     // Products tracking sheet
     productsScriptUrl:
-      'https://script.google.com/macros/s/AKfycbw-YoM9RFPoEuPnJ1mXBwkDg1TMZcrkqk0GsizG4LMsdfnIoyvQPJ8hf_sQoARMMaz_/exec',
+      'https://script.google.com/macros/s/AKfycbzsmd0MEUA_GxIgXsHOOHmEh1DFjE0jq6SE81LvVJr024xlwTJ91flYTR_wJSnGtaOG/exec',
     productsSheetId: '1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ',
   },
 
