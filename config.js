@@ -5,13 +5,13 @@ const CONFIG = {
   // ✅ Gemini API Configuration - UPDATED FOR 2026
   GEMINI_API_URL: 'https://generativelanguage.googleapis.com/v1beta/models',
 
-  // ✅ UPDATED: Use Gemini 2.5 Flash Lite (optimized for speed)
+  // ✅ UPDATED: Use Gemini 2.5 Flash (best balance for product tracking)
   // Options as of January 2026:
-  // - 'gemini-2.5-flash' (recommended - best price/performance)
-  // - 'gemini-2.5-flash-lite' (cheaper, faster, less capable) ← CURRENT
+  // - 'gemini-2.5-flash' (recommended - best price/performance) ← CURRENT
+  // - 'gemini-2.5-flash-lite' (cheaper, faster, less capable)
   // - 'gemini-2.5-pro' (most capable, slower, more expensive)
   // - 'gemini-3-flash-preview' (experimental, latest features)
-  GEMINI_MODEL: 'gemini-2.5-flash-lite',
+  GEMINI_MODEL: 'gemini-2.5-flash',
 
   GEMINI_API_KEY: '', // Will be loaded from /api/config endpoint
 
