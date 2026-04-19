@@ -1091,23 +1091,38 @@ class InvoiceScanner {
       return;
     }
 
-    // Filter out products with zero or invalid prices
+    // Filter: valid price AND arithmetic consistency (unit_price × qty ≈ total).
+    // Products that fail the math check are either OCR misreads or discount
+    // miscalculations — unreliable data that would corrupt cost tracking.
     const validProducts = result.products.filter((product) => {
       const price = parseFloat(product.unit_price_before_vat);
-      return !isNaN(price) && price > 0;
+      const qty = parseFloat(product.quantity);
+      const total = parseFloat(product.total_before_vat);
+
+      if (isNaN(price) || price <= 0) return false;
+      if (isNaN(qty) || qty <= 0) return true; // qty unknown — keep if price is valid
+
+      if (!isNaN(total) && total > 0) {
+        const expected = price * qty;
+        const tolerance = Math.max(0.5, expected * 0.02); // 2% or ₪0.50, whichever is larger
+        if (Math.abs(expected - total) > tolerance) {
+          console.warn(
+            `⚠️ Skipping "${product.name}" — math mismatch: ${price} × ${qty} = ${expected.toFixed(2)} but total is ${total} (likely discount miscalculation)`
+          );
+          return false;
+        }
+      }
+      return true;
     });
 
     if (validProducts.length === 0) {
-      console.log('ℹ️ No products with valid prices to send');
+      console.log('ℹ️ No products with valid/consistent prices to send');
       return;
     }
 
-    // Log filtered products if any were removed
     if (validProducts.length < result.products.length) {
       console.log(
-        `⚠️ Filtered out ${
-          result.products.length - validProducts.length
-        } products with zero/invalid prices`
+        `⚠️ Filtered out ${result.products.length - validProducts.length} products with invalid or math-inconsistent prices`
       );
     }
 
@@ -1258,13 +1273,12 @@ class InvoiceScanner {
 
       console.log('Sending to Google Sheets:', dataToSend);
 
-      // Send to Google Sheets via Apps Script with retry logic
-      await this.sendToSheetsWithRetry(dataToSend);
-
-      // Send products to products tracking sheet
+      // Send invoice + products in parallel (independent requests)
+      const sheetsPromises = [this.sendToSheetsWithRetry(dataToSend)];
       if (this.currentResult.products && this.currentResult.products.length > 0) {
-        await this.sendProductsToSheet(this.currentResult);
+        sheetsPromises.push(this.sendProductsToSheet(this.currentResult));
       }
+      await Promise.all(sheetsPromises);
 
       this.showStatus('הנתונים נשלחו בהצלחה ל-Google Sheets! 🎉', 'success');
 
