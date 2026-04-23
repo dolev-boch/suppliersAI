@@ -842,13 +842,14 @@ class InvoiceScanner {
   /**
    * Show status message (permanent, user controls visibility)
    */
-  showStatus(message, type = 'info') {
-    this.elements.statusMessage.textContent = message;
+  showStatus(message, type = 'info', html = false) {
+    if (html) {
+      this.elements.statusMessage.innerHTML = message;
+    } else {
+      this.elements.statusMessage.textContent = message;
+    }
     this.elements.statusMessage.className = `status-message ${type}`;
     this.elements.statusMessage.style.display = 'block';
-
-    // Success messages are permanent (no auto-hide)
-    // User can start a new scan to clear them
   }
 
   /**
@@ -1152,6 +1153,28 @@ class InvoiceScanner {
   }
 
   /**
+   * Compress image for Drive upload using canvas.
+   * Resizes to max 1400px and re-encodes as JPEG 75%.
+   * A 4MB phone photo becomes ~150-300KB — 10-15x faster to upload.
+   */
+  async compressImageForDrive(base64, originalMime) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 1400;
+        const ratio = Math.min(MAX / img.width, MAX / img.height, 1);
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.round(img.width  * ratio);
+        canvas.height = Math.round(img.height * ratio);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.75).split(',')[1]);
+      };
+      img.onerror = () => resolve(base64); // fallback: use original
+      img.src = `data:${originalMime || 'image/jpeg'};base64,${base64}`;
+    });
+  }
+
+  /**
    * Upload invoice image to Google Drive
    */
   async uploadImageToDrive(result) {
@@ -1162,14 +1185,19 @@ class InvoiceScanner {
       console.warn('⚠️ No image available for Drive upload');
       return;
     }
-    // Only upload invoices and delivery notes (skip credit invoices if desired)
     const uploadableTypes = ['invoice', 'delivery_note', 'credit_invoice'];
     if (!uploadableTypes.includes(result.document_type)) return;
 
     try {
+      const compressed = await this.compressImageForDrive(
+        this.imageBase64,
+        this.selectedFile?.type
+      );
+      console.log('🗜️ Image compressed for Drive upload');
+
       const payload = {
-        image_base64: this.imageBase64,
-        mime_type: this.selectedFile?.type || 'image/jpeg',
+        image_base64: compressed,
+        mime_type: 'image/jpeg',
         supplier_name: result.supplier_name || 'לא ידוע',
         document_type: result.document_type,
         document_date: result.document_date,
@@ -1289,10 +1317,22 @@ class InvoiceScanner {
     }
 
     try {
-      // Show loading state
       this.elements.approveAndSendBtn.disabled = true;
       this.elements.approveAndSendBtn.textContent = 'שולח...';
-      this.showStatus('שולח נתונים ל-Google Sheets...', 'info');
+
+      const phaseHTML = (sheetsActive, driveState) => `
+        <div>שולח נתונים...</div>
+        <div class="send-phases">
+          <div class="send-phase ${sheetsActive ? 'active' : 'done'}">
+            <span class="dot"></span>גיליונות Google (חשבונית + מוצרים)
+          </div>
+          <div class="send-phase ${driveState}">
+            <span class="dot"></span>Google Drive
+            ${driveState === 'active' ? '' : driveState === 'bg' ? '<span class="drive-bg-note"> — ממשיך ברקע</span>' : ''}
+          </div>
+        </div>`;
+
+      this.showStatus(phaseHTML('active', ''), 'info', true);
 
       // Merge original data with edited data
       const dataToSend = {
@@ -1311,15 +1351,25 @@ class InvoiceScanner {
 
       console.log('Sending to Google Sheets:', dataToSend);
 
-      // Send invoice, products, and Drive upload all in parallel
+      // Phase 1: sheets in parallel (~2-3s)
       const sheetsPromises = [this.sendToSheetsWithRetry(dataToSend)];
       if (this.currentResult.products && this.currentResult.products.length > 0) {
         sheetsPromises.push(this.sendProductsToSheet(this.currentResult));
       }
-      sheetsPromises.push(this.uploadImageToDrive(this.currentResult));
       await Promise.all(sheetsPromises);
 
-      this.showStatus('הנתונים נשלחו בהצלחה ל-Google Sheets! 🎉', 'success');
+      // Phase 2: Drive upload — fire and forget, user doesn't wait
+      this.showStatus(phaseHTML('done', 'active'), 'info', true);
+      this.uploadImageToDrive(this.currentResult); // intentionally not awaited
+
+      this.showStatus(
+        `<div>נשלח בהצלחה!</div>
+         <div class="send-phases">
+           <div class="send-phase done"><span class="dot"></span>גיליונות Google ✓</div>
+           <div class="send-phase done bg"><span class="dot"></span>Google Drive — ממשיך ברקע</div>
+         </div>`,
+        'success', true
+      );
 
       // Exit edit mode if active
       if (this.editMode) {
