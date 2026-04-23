@@ -36,6 +36,10 @@ const CONFIG = {
     productsScriptUrl:
       'https://script.google.com/macros/s/AKfycbzsmd0MEUA_GxIgXsHOOHmEh1DFjE0jq6SE81LvVJr024xlwTJ91flYTR_wJSnGtaOG/exec',
     productsSheetId: '1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ',
+
+    // Google Drive upload script (paste URL after deploying drive-upload.gs)
+    driveUploadScriptUrl:
+      'https://script.google.com/macros/s/AKfycbwQ8fUzZTMPXImFHOeGHldoPVu_YcpF8rC6bLxjiDrtRUY3BH07IuVMmBSCMwEc5kk/exec',
   },
 
   // Storage Keys (required by app.js)

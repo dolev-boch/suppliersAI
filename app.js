@@ -1152,6 +1152,44 @@ class InvoiceScanner {
   }
 
   /**
+   * Upload invoice image to Google Drive
+   */
+  async uploadImageToDrive(result) {
+    if (!CONFIG.SHEETS_CONFIG.driveUploadScriptUrl) {
+      return; // Not configured yet
+    }
+    if (!this.imageBase64) {
+      console.warn('⚠️ No image available for Drive upload');
+      return;
+    }
+    // Only upload invoices and delivery notes (skip credit invoices if desired)
+    const uploadableTypes = ['invoice', 'delivery_note', 'credit_invoice'];
+    if (!uploadableTypes.includes(result.document_type)) return;
+
+    try {
+      const payload = {
+        image_base64: this.imageBase64,
+        mime_type: 'image/jpeg',
+        supplier_name: result.supplier_name || 'לא ידוע',
+        document_type: result.document_type,
+        document_date: result.document_date,
+      };
+
+      await fetch(CONFIG.SHEETS_CONFIG.driveUploadScriptUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      console.log('✅ Image uploaded to Google Drive');
+    } catch (error) {
+      // Never block the main flow if Drive upload fails
+      console.error('❌ Drive upload failed (non-blocking):', error);
+    }
+  }
+
+  /**
    * Send bulk data to Google Sheets
    */
   async sendBulkDataToSheets(result) {
@@ -1273,11 +1311,12 @@ class InvoiceScanner {
 
       console.log('Sending to Google Sheets:', dataToSend);
 
-      // Send invoice + products in parallel (independent requests)
+      // Send invoice, products, and Drive upload all in parallel
       const sheetsPromises = [this.sendToSheetsWithRetry(dataToSend)];
       if (this.currentResult.products && this.currentResult.products.length > 0) {
         sheetsPromises.push(this.sendProductsToSheet(this.currentResult));
       }
+      sheetsPromises.push(this.uploadImageToDrive(this.currentResult));
       await Promise.all(sheetsPromises);
 
       this.showStatus('הנתונים נשלחו בהצלחה ל-Google Sheets! 🎉', 'success');
