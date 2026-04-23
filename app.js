@@ -1169,7 +1169,7 @@ class InvoiceScanner {
     try {
       const payload = {
         image_base64: this.imageBase64,
-        mime_type: 'image/jpeg',
+        mime_type: this.selectedFile?.type || 'image/jpeg',
         supplier_name: result.supplier_name || 'לא ידוע',
         document_type: result.document_type,
         document_date: result.document_date,
