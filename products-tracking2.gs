@@ -20,6 +20,11 @@ const PRODUCTS_SPREADSHEET_ID = '1vPVl1txkN1wgXJncNMX3-VZZENOx2J8O1FXJlbl7hUQ';
 const PRICE_HISTORY_SHEET_NAME = 'היסטוריית שינויי מחירים';
 const PRODUCT_DATA_START_ROW = 2;
 
+// Price changes larger than this fraction are treated as suspicious AI misreads.
+// The price will NOT be updated and no email will be sent — only logged in history.
+// Example: 0.35 = any change > 35% is flagged.
+const SUSPICIOUS_CHANGE_THRESHOLD = 0.35;
+
 // Email Configuration
 const EMAIL_CONFIG = {
   recipient: 'edenpatis@gmail.com',
@@ -211,24 +216,32 @@ function processProduct(
     Logger.log(`Found existing: ₪${oldPrice.toFixed(2)} at row ${existingProduct.rowIndex}`);
 
     if (Math.abs(newPrice - oldPrice) > 0.01) {
-      // Price changed!
-      const changePercent = ((newPrice - oldPrice) / oldPrice) * 100;
-      const changeAmount = newPrice - oldPrice;
+      const changeAmount  = newPrice - oldPrice;
+      const changePercent = (changeAmount / oldPrice) * 100;
+      const changeFraction = Math.abs(changeAmount) / oldPrice;
 
       Logger.log(`💰 PRICE CHANGE: ₪${oldPrice.toFixed(2)} → ₪${newPrice.toFixed(2)}`);
       Logger.log(
-        `   Change: ${changeAmount >= 0 ? '+' : ''}₪${changeAmount.toFixed(2)} (${
-          changeAmount >= 0 ? '+' : ''
-        }${changePercent.toFixed(1)}%)`
+        `   Change: ${changeAmount >= 0 ? '+' : ''}₪${changeAmount.toFixed(2)} (${changePercent.toFixed(1)}%)`
       );
 
-      // ✅ FIX 3: UPDATE existing row (don't add new row)
+      // Sanity gate: changes above SUSPICIOUS_CHANGE_THRESHOLD are likely AI
+      // misreads (wrong digit, missed discount, OCR error). Log to history for
+      // manual review but do NOT update the stored price or send an email.
+      if (changeFraction > SUSPICIOUS_CHANGE_THRESHOLD) {
+        Logger.log(
+          `⚠️ SUSPICIOUS: ${Math.abs(changePercent).toFixed(1)}% change exceeds ${(SUSPICIOUS_CHANGE_THRESHOLD * 100).toFixed(0)}% threshold — skipping update`
+        );
+        addToPriceHistory(
+          historySheet, supplierName, productName, oldPrice, newPrice, documentDate,
+          '⚠️ חשוד - לא עודכן (שינוי של ' + Math.abs(changePercent).toFixed(0) + '% — בדוק ידנית)'
+        );
+        return false;
+      }
+
+      // Legitimate change — update price, log, and notify
       updateProductPrice(supplierSheet, existingProduct.rowIndex, newPrice);
-
-      // Add to price history
-      addToPriceHistory(historySheet, supplierName, productName, oldPrice, newPrice, documentDate);
-
-      // Send email notification
+      addToPriceHistory(historySheet, supplierName, productName, oldPrice, newPrice, documentDate, '');
       sendPriceChangeEmail(supplierName, productName, oldPrice, newPrice, changePercent);
 
       return true;
@@ -431,8 +444,9 @@ function addNewProduct(sheet, productName, price) {
 
 /**
  * ✅ FIXED: Add entry to price history with proper data types
+ * @param {string} note  Optional label (e.g. suspicious flag). Written to column H.
  */
-function addToPriceHistory(sheet, supplierName, productName, oldPrice, newPrice, documentDate) {
+function addToPriceHistory(sheet, supplierName, productName, oldPrice, newPrice, documentDate, note) {
   const lastRow = sheet.getLastRow();
   const newRow = Math.max(lastRow + 1, PRODUCT_DATA_START_ROW);
 
@@ -505,7 +519,15 @@ function addToPriceHistory(sheet, supplierName, productName, oldPrice, newPrice,
     }
   }
 
-  Logger.log(`   📝 History: ${supplierName} | ${productName} | ${oldPriceDisplay} → ${newPrice}`);
+  // Column H: optional note (e.g. suspicious flag)
+  if (note) {
+    sheet.getRange(newRow, 8).setValue(note);
+    // Highlight entire suspicious row in orange so it stands out
+    sheet.getRange(newRow, 1, 1, 8).setBackground('#fff3e0');
+    sheet.getRange(newRow, 8).setFontColor('#e65100').setFontWeight('bold');
+  }
+
+  Logger.log(`   📝 History: ${supplierName} | ${productName} | ${oldPriceDisplay} → ${newPrice}${note ? ' [' + note + ']' : ''}`);
 }
 
 // ============================================================================

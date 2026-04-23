@@ -23,12 +23,19 @@ function doPost(e) {
     // Parse date → year + zero-padded month
     const parts = docDate.split('/');
     if (parts.length !== 3) return respond(false, 'Invalid date: ' + docDate);
-    const month = parts[1]; // already zero-padded from AI (e.g. "04")
-    const year  = parts[2]; // e.g. "2026"
+    const month       = parts[1]; // e.g. "04"
+    const currentYear = new Date().getFullYear();
 
-    // Folder structure: root → year → supplier → month
+    // Always use the server's real current year — never trust the AI's year.
+    // AI frequently misreads short date formats (e.g. "26" → "2024").
+    // The server clock is the only reliable source of the year.
+    const yearFolderName = String(currentYear);
+
+    Logger.log('Using server year: ' + yearFolderName + ' (AI date was: ' + docDate + ')');
+
+    // Folder structure: root → year (or archive) → supplier → month
     const root          = DriveApp.getFolderById(DRIVE_ROOT_FOLDER_ID);
-    const yearFolder     = getOrCreate(root, year);
+    const yearFolder     = getOrCreate(root, yearFolderName);
     const supplierFolder = getOrCreate(yearFolder, supplier);
     const monthFolder    = getOrCreate(supplierFolder, month);
 
@@ -66,18 +73,19 @@ function respond(success, message) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// Manual test — run this once from the script editor to verify folder creation
+// Manual test — all cases should land in the current year folder
 function testUpload() {
-  const fakeEvent = {
-    postData: {
-      contents: JSON.stringify({
-        image_base64: Utilities.base64Encode('test'),
-        mime_type: 'image/jpeg',
-        supplier_name: 'TEST_SUPPLIER',
-        document_type: 'invoice',
-        document_date: '23/04/2026',
-      })
-    }
-  };
-  Logger.log(doPost(fakeEvent).getContent());
+  const cases = [
+    { label: 'normal date',    date: '23/04/2026' },
+    { label: 'AI 2-digit year', date: '09/04/26'  },
+    { label: 'AI wrong year',  date: '09/04/2024' },
+  ];
+
+  cases.forEach(function(c) {
+    const ev = { postData: { contents: JSON.stringify({
+      image_base64: Utilities.base64Encode('test'), mime_type: 'image/jpeg',
+      supplier_name: 'TEST_SUPPLIER', document_type: 'invoice', document_date: c.date,
+    })}};
+    Logger.log('Test [' + c.label + ']: ' + doPost(ev).getContent());
+  });
 }

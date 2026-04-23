@@ -1104,7 +1104,7 @@ class InvoiceScanner {
 
       if (!isNaN(total) && total > 0) {
         const expected = price * qty;
-        const tolerance = Math.max(0.5, expected * 0.02); // 2% or ₪0.50, whichever is larger
+        const tolerance = Math.max(0.5, expected * 0.03); // 3% or ₪0.50 — extra room for ÷1.18 rounding
         if (Math.abs(expected - total) > tolerance) {
           console.warn(
             `⚠️ Skipping "${product.name}" — math mismatch: ${price} × ${qty} = ${expected.toFixed(2)} but total is ${total} (likely discount miscalculation)`
