@@ -12,6 +12,7 @@ function doPost(e) {
 
     const imageBase64 = data.image_base64;
     const mimeType    = data.mime_type || 'image/jpeg';
+    const fileExt     = data.file_ext  || '';           // '.pdf' or '.jpg' or ''
     const supplier    = data.supplier_name;
     const docType     = data.document_type; // 'invoice' | 'delivery_note' | 'credit_invoice'
     const docDate     = data.document_date; // DD/MM/YYYY
@@ -39,15 +40,16 @@ function doPost(e) {
     const supplierFolder = getOrCreate(yearFolder, supplier);
     const monthFolder    = getOrCreate(supplierFolder, month);
 
-    // File name based on document type
-    let fileName;
+    // File name based on document type + extension from client
+    let baseName;
     if (docType === 'delivery_note') {
-      fileName = 'תעודת משלוח';
+      baseName = 'תעודת משלוח';
     } else if (docType === 'credit_invoice') {
-      fileName = 'חשבונית זיכוי';
+      baseName = 'חשבונית זיכוי';
     } else {
-      fileName = 'חשבונית מס';
+      baseName = 'חשבונית מס';
     }
+    const fileName = baseName + fileExt; // e.g. "חשבונית מס.pdf"
 
     // Decode and save
     const blob = Utilities.newBlob(Utilities.base64Decode(imageBase64), mimeType, fileName);

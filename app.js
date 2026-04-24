@@ -1153,24 +1153,119 @@ class InvoiceScanner {
   }
 
   /**
-   * Compress image for Drive upload using canvas.
-   * Resizes to max 1400px and re-encodes as JPEG 75%.
-   * A 4MB phone photo becomes ~150-300KB — 10-15x faster to upload.
+   * Process image for Drive: grayscale + auto-levels + scan contrast + sharpen → PDF.
+   * Runs in background so processing time doesn't affect the user.
+   * Returns { data: base64, mime, ext }.
    */
-  async compressImageForDrive(base64, originalMime) {
+  async processImageForDrive(base64, originalMime) {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
-        const MAX = 1400;
-        const ratio = Math.min(MAX / img.width, MAX / img.height, 1);
-        const canvas = document.createElement('canvas');
-        canvas.width  = Math.round(img.width  * ratio);
-        canvas.height = Math.round(img.height * ratio);
-        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.75).split(',')[1]);
+        try {
+          // Resize to max 2200px (good resolution for PDF readability)
+          const MAX   = 2200;
+          const ratio = Math.min(MAX / img.width, MAX / img.height, 1);
+          const W     = Math.round(img.width  * ratio);
+          const H     = Math.round(img.height * ratio);
+
+          const canvas = document.createElement('canvas');
+          canvas.width  = W;
+          canvas.height = H;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(img, 0, 0, W, H);
+
+          const imageData = ctx.getImageData(0, 0, W, H);
+          const data = imageData.data;
+          const n    = W * H;
+
+          // ── Step 1: grayscale + histogram ────────────────────────────────
+          const gray = new Uint8Array(n);
+          const hist = new Int32Array(256);
+          for (let i = 0; i < n; i++) {
+            const p = i * 4;
+            gray[i] = Math.round(0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2]);
+            hist[gray[i]]++;
+          }
+
+          // ── Step 2: auto-levels (2nd–98th percentile) ───────────────────
+          const lo = 0.02 * n, hi = 0.98 * n;
+          let cum = 0, minV = 0, maxV = 255;
+          for (let v = 0; v < 256; v++) {
+            cum += hist[v];
+            if (cum < lo) minV = v;
+            if (cum < hi) maxV = v;
+          }
+          const span = maxV - minV || 1;
+
+          // ── Step 3: scan contrast LUT ────────────────────────────────────
+          // Highlights (paper) → pure white. Shadows (ink) → near black.
+          const lut = new Uint8Array(256);
+          for (let v = 0; v < 256; v++) {
+            let nv = Math.max(0, Math.min(255, Math.round((v - minV) * 255 / span)));
+            let out;
+            if (nv >= 175) {
+              out = Math.round(255 * Math.pow(nv / 255, 0.32)); // whiten paper
+            } else if (nv <= 105) {
+              out = Math.round(255 * Math.pow(nv / 255, 2.4));  // darken ink
+            } else {
+              const t = (nv - 105) / 70;
+              const s = 255 * Math.pow(nv / 255, 2.4);
+              const h = 255 * Math.pow(nv / 255, 0.32);
+              out = Math.round(s * (1 - t) + h * t);            // smooth midtone blend
+            }
+            lut[v] = Math.max(0, Math.min(255, out));
+          }
+
+          // Apply grayscale + LUT
+          for (let i = 0; i < n; i++) {
+            const val = lut[gray[i]];
+            const p   = i * 4;
+            data[p] = data[p + 1] = data[p + 2] = val;
+          }
+
+          // ── Step 4: unsharp mask (3×3 sharpening) ───────────────────────
+          const sharp = new Uint8Array(n);
+          for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+              const i = y * W + x;
+              if (x === 0 || y === 0 || x === W - 1 || y === H - 1) {
+                sharp[i] = data[i * 4];
+                continue;
+              }
+              const c = data[i * 4];
+              const t = data[(i - W) * 4];
+              const b = data[(i + W) * 4];
+              const l = data[(i - 1)  * 4];
+              const r = data[(i + 1)  * 4];
+              sharp[i] = Math.max(0, Math.min(255, 5 * c - t - b - l - r));
+            }
+          }
+          for (let i = 0; i < n; i++) {
+            const p = i * 4;
+            data[p] = data[p + 1] = data[p + 2] = sharp[i];
+          }
+
+          ctx.putImageData(imageData, 0, 0);
+
+          // ── Step 5: generate PDF ─────────────────────────────────────────
+          const imgDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+          if (window.jspdf && window.jspdf.jsPDF) {
+            const { jsPDF }   = window.jspdf;
+            const orientation = W >= H ? 'l' : 'p';
+            const pdf = new jsPDF({ orientation, unit: 'px', format: [W, H], compress: true });
+            pdf.addImage(imgDataUrl, 'JPEG', 0, 0, W, H);
+            resolve({ data: pdf.output('datauristring').split(',')[1], mime: 'application/pdf', ext: '.pdf' });
+          } else {
+            // jsPDF not loaded — fallback to enhanced JPEG
+            resolve({ data: imgDataUrl.split(',')[1], mime: 'image/jpeg', ext: '.jpg' });
+          }
+        } catch (err) {
+          console.error('Image processing error:', err);
+          resolve({ data: base64, mime: originalMime || 'image/jpeg', ext: '' });
+        }
       };
-      img.onerror = () => resolve(base64); // fallback: use original
-      img.src = `data:${originalMime || 'image/jpeg'};base64,${base64}`;
+      img.onerror = () => resolve({ data: base64, mime: originalMime || 'image/jpeg', ext: '' });
+      img.src     = `data:${originalMime || 'image/jpeg'};base64,${base64}`;
     });
   }
 
@@ -1189,15 +1284,16 @@ class InvoiceScanner {
     if (!uploadableTypes.includes(result.document_type)) return;
 
     try {
-      const compressed = await this.compressImageForDrive(
+      const processed = await this.processImageForDrive(
         this.imageBase64,
         this.selectedFile?.type
       );
-      console.log('🗜️ Image compressed for Drive upload');
+      console.log(`🖨️ Image processed for Drive: ${processed.mime}`);
 
       const payload = {
-        image_base64: compressed,
-        mime_type: 'image/jpeg',
+        image_base64: processed.data,
+        mime_type:    processed.mime,
+        file_ext:     processed.ext,
         supplier_name: result.supplier_name || 'לא ידוע',
         document_type: result.document_type,
         document_date: result.document_date,
