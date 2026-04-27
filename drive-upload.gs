@@ -43,32 +43,32 @@ function doPost(e) {
     Logger.log('Year: ' + currentYear + ' | Month: ' + monthNum +
                ' | Day: ' + day + ' | Date confidence: ' + dateConfidence + '%');
 
-    // Folder structure: root → year → supplier → month → [day if confident]
+    // Folder structure: root → year → supplier → month (no day subfolder)
     const root           = DriveApp.getFolderById(DRIVE_ROOT_FOLDER_ID);
     const yearFolder     = getOrCreate(root, currentYear);
     const supplierFolder = getOrCreate(yearFolder, supplier);
-    const monthFolder    = getOrCreate(supplierFolder, monthFolderName(monthNum));
+    const targetFolder   = getOrCreate(supplierFolder, monthFolderName(monthNum));
 
-    // Create a day subfolder only when date confidence is ≥ 95%
-    const targetFolder = dateConfidence >= 95
-      ? getOrCreate(monthFolder, day)
-      : monthFolder;
-
-    if (dateConfidence >= 95) {
-      Logger.log('Date confidence ' + dateConfidence + '% ≥ 95% → using day folder: ' + day);
-    } else {
-      Logger.log('Date confidence ' + dateConfidence + '% < 95% → skipping day folder');
-    }
-
-    // File name
+    // File name — append date (DD.MM.YY) when confidence ≥ 95%
     let baseName;
-    if (docType === 'delivery_note')   baseName = 'תעודת משלוח';
+    if (docType === 'delivery_note')       baseName = 'תעודת משלוח';
     else if (docType === 'credit_invoice') baseName = 'חשבונית זיכוי';
-    else                               baseName = 'חשבונית מס';
+    else                                   baseName = 'חשבונית מס';
 
-    const fileName = baseName + fileExt;
-    const blob     = Utilities.newBlob(Utilities.base64Decode(imageBase64), mimeType, fileName);
-    const file     = targetFolder.createFile(blob);
+    const shortYear = String(new Date().getFullYear()).slice(-2); // "26"
+    const dateSuffix = dateConfidence >= 95
+      ? '_' + day + '.' + monthNum + '.' + shortYear
+      : '';
+
+    Logger.log('Date confidence ' + dateConfidence + '% → suffix: "' + dateSuffix + '"');
+
+    const fileName    = baseName + dateSuffix + fileExt;
+    // Strip any whitespace/newlines that corrupt base64 decoding
+    const cleanBase64 = imageBase64.replace(/[\s\r\n]/g, '');
+    Logger.log('Base64 length: ' + cleanBase64.length + ' bytes | File: ' + fileName);
+
+    const blob = Utilities.newBlob(Utilities.base64Decode(cleanBase64), mimeType, fileName);
+    const file = targetFolder.createFile(blob);
 
     Logger.log('✅ Uploaded: ' + file.getName() + ' → ' + file.getId());
     return respond(true, 'Uploaded ' + file.getName());
@@ -92,9 +92,9 @@ function respond(success, message) {
 
 function testUpload() {
   const cases = [
-    { label: 'high confidence → day folder',  date: '01/04/2026', confidence: 97 },
-    { label: 'low confidence → no day folder', date: '09/04/2026', confidence: 80 },
-    { label: 'exact threshold (95)',           date: '15/04/2026', confidence: 95 },
+    { label: 'high confidence → date in name',  date: '06/04/2026', confidence: 97 },
+    { label: 'low confidence → no date in name', date: '09/04/2026', confidence: 80 },
+    { label: 'exact threshold (95)',             date: '15/04/2026', confidence: 95 },
   ];
   cases.forEach(function(c) {
     const ev = { postData: { contents: JSON.stringify({
