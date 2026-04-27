@@ -1291,12 +1291,13 @@ class InvoiceScanner {
       console.log(`🖨️ Image processed for Drive: ${processed.mime}`);
 
       const payload = {
-        image_base64: processed.data,
-        mime_type:    processed.mime,
-        file_ext:     processed.ext,
-        supplier_name: result.supplier_name || 'לא ידוע',
-        document_type: result.document_type,
-        document_date: result.document_date,
+        image_base64:    processed.data,
+        mime_type:       processed.mime,
+        file_ext:        processed.ext,
+        supplier_name:   result.supplier_name  || 'לא ידוע',
+        document_type:   result.document_type,
+        document_date:   result.document_date,
+        date_confidence: result.date_confidence || 0,
       };
 
       await fetch(CONFIG.SHEETS_CONFIG.driveUploadScriptUrl, {
