@@ -96,7 +96,8 @@ async function loadApiKey() {
     const config = await response.json();
     CONFIG.GEMINI_API_KEY = config.GEMINI_API_KEY;
     console.log('✅ API key loaded successfully');
-    console.log(`✅ Using model: ${CONFIG.GEMINI_MODEL}`);
+    console.log(`✅ Invoice reading model: ${CONFIG.VISION_MODEL || CONFIG.GEMINI_MODEL}`);
+    console.log(`✅ Helper model (table detection, catalog matching): ${CONFIG.GEMINI_MODEL}`);
   } catch (error) {
     console.error('❌ Failed to load API key:', error);
     // Don't throw - allow app to load and show error when user tries to scan
