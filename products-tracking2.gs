@@ -363,7 +363,7 @@ function processProduct(supplierSheet, historySheet, existingProducts, product, 
 
 /**
  * Rename an existing row to the verified reading of the invoice, so old misread names
- * ("שמנת קרט טבעי") fix themselves on the next clear scan — no manual edits.
+ * fix themselves on the next clear scan — no manual edits.
  * Only when: the app verified the name, the names really differ, sizes/percentages
  * don't conflict, and no other row already has that name.
  */
@@ -604,7 +604,7 @@ function productNameScore(a, b) {
   if (na === nb) return 1;
   if (numbersConflict(a, b)) return 0;
 
-  // A bare unit word ("ריקוטה ק"ג") carries no identity — ignore it unless it follows a number
+  // A bare unit word (e.g. a trailing "ק"ג") carries no identity — ignore it unless it follows a number
   const UNITS = ['קג', 'ליטר', 'גרמ', 'מל', 'יח'];
   function meaningful(tokens) {
     const out = tokens.filter(function (t, i) {

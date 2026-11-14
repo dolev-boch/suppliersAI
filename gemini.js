@@ -627,6 +627,8 @@ const GeminiService = {
         p.name_verified = false;
         p.name_candidates = [p.name];
         p.name_second_reading = null;
+        // No OCR counterpart: every word must be confirmed by the tie-break
+        p.name_slots = words.map((w) => ({ g: w, o: null, agree: false }));
         console.warn(`⚠️ Name not found in OCR: "${p.name}"`);
         return;
       }
@@ -654,18 +656,15 @@ const GeminiService = {
         }
       });
 
-      let agree = true;
-      const ocrWords = words.map((w, i) => {
+      // Word slots: Gemini's word, the OCR's word, and whether they agree
+      p.name_slots = words.map((w, i) => {
         const m = paired[i];
-        if (m && m.skip) return w;
-        if (!m || !m.token) {
-          agree = false;
-          return w;
-        }
-        if (m.token.k !== keys[i]) agree = false;
-        return m.token.raw;
+        if (m && m.skip) return { g: w, o: w, agree: true };
+        const o = m && m.token ? m.token.raw : null;
+        return { g: w, o, agree: !!(m && m.token && m.token.k === keys[i]) };
       });
-      const ocrName = ocrWords.join(' ');
+      const agree = p.name_slots.every((s) => s.agree);
+      const ocrName = p.name_slots.map((s) => s.o || s.g).join(' ');
 
       p.name_ocr = ocrName;
       if (agree) {
@@ -900,6 +899,10 @@ const GeminiService = {
    * image — or null. Constrained to the candidates, so nothing new can be invented.
    */
   async adjudicateNames(pending, imagePart) {
+    // OCR path: decide word by word (each disputed word between its two readings)
+    if (pending.every((p) => Array.isArray(p.name_slots))) {
+      return this.adjudicateWords(pending, imagePart);
+    }
     const MIN = CONFIG.READABILITY?.MIN_NAME_CERTAINTY ?? 90;
     try {
       const lines = pending
@@ -953,6 +956,93 @@ ${lines}`,
       });
     } catch (err) {
       console.warn('⚠️ Name tie-break failed:', err.message);
+    }
+  },
+
+  /**
+   * Word-level tie-break. For every word on which Gemini and the OCR disagree, the
+   * model looks at the (enlarged) image and picks which of the two readings of THAT
+   * word is printed — or null. The final name can combine the right word from each
+   * source (one word from Gemini, another from the OCR), yet consists only of words that
+   * were actually read. Every disputed word needs ≥ MIN_NAME_CERTAINTY.
+   */
+  async adjudicateWords(pending, imagePart) {
+    const MIN = CONFIG.READABILITY?.MIN_NAME_CERTAINTY ?? 90;
+    const options = (s) => (s.o && s.o !== s.g ? [s.g, s.o] : [s.g]);
+
+    const blocks = pending.map((p, i) => {
+      const full = p.name_slots.map((s) => s.g).join(' ');
+      const disputed = p.name_slots
+        .map((s, j) => (s.agree ? null : `  מילה ${j}: ${options(s).map((o, k) => `[${k}] ${o}`).join('   ')}`))
+        .filter(Boolean)
+        .join('\n');
+      return `שורה ${i}: "${full}"\n${disputed}`;
+    });
+
+    try {
+      const { text } = await this.callGemini(
+        [
+          {
+            text: `בתמונה טבלת מוצרים מחשבונית. לכל שורה למטה יש מילים שנקראו בשתי דרכים שונות.
+לכל מילה כזו: מצא אותה בשם המוצר המודפס בתמונה ובחר את הקריאה שתואמת **בדיוק, אות אחר אות**, למה שמודפס.
+החלט לפי האותיות שבתמונה (שים לב לאותיות דומות בצורתן כמו ד/ר, ב/כ, ה/ח, ו/ז, ס/ם), לא לפי איזו מילה נשמעת הגיונית.
+אם אף אפשרות לא תואמת בדיוק — choice: null.
+
+${blocks.join('\n\n')}`,
+          },
+          imagePart,
+        ],
+        {
+          timeoutMs: 45000,
+          highResImage: true,
+          thinkingLevel: 'LOW',
+          model: CONFIG.VISION_MODEL || null,
+          schema: {
+            type: 'object',
+            properties: {
+              picks: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    line: { type: 'integer' },
+                    word: { type: 'integer' },
+                    choice: { type: ['integer', 'null'] },
+                    confidence: { type: 'integer', minimum: 0, maximum: 100 },
+                  },
+                  required: ['line', 'word', 'choice', 'confidence'],
+                },
+              },
+            },
+            required: ['picks'],
+          },
+        }
+      );
+
+      const picks = this.parseJson(text).picks || [];
+      pending.forEach((p, i) => {
+        let complete = true;
+        const words = p.name_slots.map((s, j) => {
+          if (s.agree) return s.g;
+          const pick = picks.find((x) => x.line === i && x.word === j);
+          const opts = options(s);
+          if (!pick || !Number.isInteger(pick.choice) || !opts[pick.choice] || pick.confidence < MIN) {
+            complete = false;
+            return s.g;
+          }
+          return opts[pick.choice];
+        });
+        const decided = words.join(' ');
+        if (complete) {
+          console.log(`⚖️ Name decided word-by-word from image: "${p.name}" / "${p.name_ocr || '—'}" → "${decided}"`);
+          p.name = decided;
+          p.name_verified = true;
+        } else {
+          p.name_candidates = [...new Set([p.name, decided, p.name_ocr].filter(Boolean))];
+        }
+      });
+    } catch (err) {
+      console.warn('⚠️ Word tie-break failed:', err.message);
     }
   },
 
