@@ -6,17 +6,14 @@
  *
  * Supplier sheet columns:
  *   A  שם מוצר
- *   B  מחיר נוכחי לפני מע״מ   (last price paid, after discount)
- *   C  הערות                    ("הנחה נרשמה עבור מוצר זה (10% הנחה)" when B is a discounted price)
- *   D  מחיר רגיל אחרון          (last price WITHOUT discount — used for real price-change alerts)
+ *   B  מחיר לפני מע״מ           (the list price exactly as printed on the invoice, before any discount)
+ *   C  הערות                    ("הנחה נרשמה עבור מוצר זה (20% הנחה)" when the last purchase had a discount)
+ *   D  מחיר ששולם בפועל         (price actually paid per unit after the discount, for reference)
+ *   E  יחידה                    (ק״ג / יח׳ / ליטר … — weighed goods are always per ק״ג)
  *
- * Discount rules:
- *   regular → regular     : normal compare + email on change
- *   discount → discount   : normal compare + email on change (note updated)
- *   discount → regular    : B updated, note cleared. Email only if the new regular price
- *                           differs from the last known regular price (column D). Never an
- *                           "increase" alert just because the discount ended.
- *   regular → discount    : B updated + note. No email (a discount is not a price change).
+ * Price-change logic compares LIST prices only (column B):
+ *   - Same list price, discount appears/disappears → note updated, no alert.
+ *   - List price changed (with or without discount) → alert (note included if discounted).
  */
 
 // ============================================================================
@@ -31,6 +28,8 @@ const COL_NAME = 1;
 const COL_PRICE = 2;
 const COL_NOTES = 3;
 const COL_REGULAR = 4;
+const COL_UNIT = 5;
+const NUM_COLS = 5;
 
 const DISCOUNT_NOTE = 'הנחה נרשמה עבור מוצר זה';
 
@@ -157,7 +156,7 @@ function processProducts(data) {
   }
 
   const ss = SpreadsheetApp.openById(PRODUCTS_SPREADSHEET_ID);
-  const supplierSheet = getOrCreateSupplierSheet(ss, supplierName);
+  const supplierSheet = getOrCreateSupplierSheet(ss, supplierName, products);
   const sheetSupplierName = supplierSheet.getName();
   const historySheet = ss.getSheetByName(PRICE_HISTORY_SHEET_NAME);
 
@@ -178,7 +177,84 @@ function processProducts(data) {
       processed++;
     }
   });
+
+  // Keep the product list in Hebrew alphabetical order (א-ב).
+  // Done last, because sorting moves rows and the row indexes above would go stale.
+  sortProductsSheet(supplierSheet);
+
+  // Keep the supplier tabs in א-ב order too
+  arrangeSheetsAlphabetically(ss);
+
   Logger.log('✅ Completed: ' + processed + '/' + products.length + ' processed');
+}
+
+/**
+ * Sort a supplier sheet's products (row 2 down, columns A-D) by product name א-ב.
+ */
+function sortProductsSheet(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= PRODUCT_DATA_START_ROW) return;
+  sheet.getRange(PRODUCT_DATA_START_ROW, 1, lastRow - PRODUCT_DATA_START_ROW + 1, NUM_COLS)
+    .sort({ column: COL_NAME, ascending: true });
+}
+
+/**
+ * Order the tabs: price-history tab first, then all supplier tabs א-ב.
+ * Only tabs that are out of place are moved.
+ */
+function arrangeSheetsAlphabetically(ss) {
+  const sheets = ss.getSheets();
+  const history = sheets.filter(function (s) { return s.getName() === PRICE_HISTORY_SHEET_NAME; });
+  const suppliers = sheets
+    .filter(function (s) { return s.getName() !== PRICE_HISTORY_SHEET_NAME; })
+    .sort(function (a, b) { return a.getName().localeCompare(b.getName(), 'he'); });
+  const desired = history.concat(suppliers);
+
+  const active = ss.getActiveSheet();
+  desired.forEach(function (sheet, i) {
+    if (ss.getSheets()[i].getSheetId() !== sheet.getSheetId()) {
+      ss.setActiveSheet(sheet);
+      ss.moveActiveSheet(i + 1); // 1-based position
+    }
+  });
+  if (active) ss.setActiveSheet(active);
+}
+
+/**
+ * One-time / manual (run from the editor): sort every supplier's products א-ב
+ * and arrange all tabs א-ב.
+ */
+function sortAllSupplierSheets() {
+  const ss = SpreadsheetApp.openById(PRODUCTS_SPREADSHEET_ID);
+  ss.getSheets().forEach(function (s) {
+    if (s.getName() === PRICE_HISTORY_SHEET_NAME) return;
+    sortProductsSheet(s);
+    Logger.log('Sorted products: ' + s.getName());
+  });
+  arrangeSheetsAlphabetically(ss);
+  Logger.log('✅ Tabs arranged א-ב');
+}
+
+/**
+ * One-time cleanup (run from the editor): remove discount notes that were really
+ * rounding adjustments — "(0% הנחה)" / "(0.1% הנחה)" — and fill in the regular price.
+ */
+function cleanupTrivialDiscountNotes() {
+  const ss = SpreadsheetApp.openById(PRODUCTS_SPREADSHEET_ID);
+  let fixed = 0;
+  ss.getSheets().forEach(function (s) {
+    if (s.getName() === PRICE_HISTORY_SHEET_NAME) return;
+    getExistingProducts(s).forEach(function (p) {
+      const m = p.note.match(/\(([\d.]+)% הנחה\)/);
+      if (p.isDiscount && m && parseFloat(m[1]) < 1) {
+        s.getRange(p.rowIndex, COL_NOTES).setValue('');
+        s.getRange(p.rowIndex, COL_REGULAR).setValue(p.price).setNumberFormat('0.00');
+        fixed++;
+        Logger.log('Fixed: ' + s.getName() + ' / ' + p.name);
+      }
+    });
+  });
+  Logger.log('✅ Removed ' + fixed + ' rounding "discount" notes');
 }
 
 function buildDiscountNote(product) {
@@ -190,85 +266,101 @@ function formatPct(p) {
   return Math.round(p * 10) / 10;
 }
 
+/** Rounding adjustment, not a real discount: under ₪0.50 and under 1% (or printed % under 1) */
+function isTrivialDiscount(product) {
+  const pct = parseFloat(product.discount_percent);
+  if (!isNaN(pct) && pct >= 1) return false;
+  let amount = parseFloat(product.discount_amount);
+  const price = parseFloat(product.unit_price_before_vat);
+  const qty = parseFloat(product.quantity) || 1;
+  const before = parseFloat(product.price_before_discount);
+  if (isNaN(amount) && !isNaN(before) && !isNaN(price)) amount = (before - price) * qty;
+  if (isNaN(amount)) return !isNaN(pct) && pct < 1;
+  const line = parseFloat(product.total_before_vat) || price * qty;
+  return Math.abs(amount) < 0.5 && (!line || Math.abs(amount) / line < 0.01);
+}
+
+/** Canonical unit label for the sheet */
+function normalizeUnit(u) {
+  const t = String(u || '').replace(/["'״׳`.\s]/g, '').toLowerCase();
+  if (!t) return '';
+  if (['קג', 'קילו', 'kg'].indexOf(t) !== -1) return 'ק״ג';
+  if (['ליטר', 'ל', 'lt', 'l'].indexOf(t) !== -1) return 'ליטר';
+  if (['יח', 'יחידה', 'יחידות', 'unit', 'pcs'].indexOf(t) !== -1) return 'יח׳';
+  if (['גרמ', 'גרם', 'גר', 'g'].indexOf(t) !== -1) return 'גרם';
+  if (['מל', 'ml'].indexOf(t) !== -1) return 'מ״ל';
+  return String(u).trim();
+}
+
 /**
- * Process one product line
+ * Process one product line.
+ * Column B always holds the invoice's printed price (before discount); the discount
+ * only adds a note. So a discount coming or going never triggers an alert by itself.
  */
 function processProduct(supplierSheet, historySheet, existingProducts, product, supplierName, documentDate) {
   const productName = product.name ? String(product.name).trim() : '';
-  const newPrice = parseFloat(product.unit_price_before_vat);
-  const isDiscount = product.discount_applied === true || product.discount_applied === 'true';
+  const paidPrice = parseFloat(product.unit_price_before_vat);
+  const unit = normalizeUnit(product.unit);
+  // A few agorot of rounding ("הנ: 0.01") is not a discount
+  const isDiscount = (product.discount_applied === true || product.discount_applied === 'true') &&
+    !isTrivialDiscount(product);
+
+  // List price = price before the discount (as printed); without a discount it's the price paid
+  const before = parseFloat(product.price_before_discount);
+  const listPrice = isDiscount && before > 0 ? before : paidPrice;
 
   if (!productName) return false;
-  if (isNaN(newPrice) || newPrice <= 0) {
+  if (isNaN(listPrice) || listPrice <= 0) {
     Logger.log('⚠️ Skipping "' + productName + '" - invalid price');
     return false;
   }
 
+  const note = isDiscount ? buildDiscountNote(product) : '';
   const existing = findProduct(existingProducts, productName, product.catalog_name);
 
   // ---------------------------------------------------------------- new product
   if (!existing) {
-    const note = isDiscount ? buildDiscountNote(product) : '';
-    const regular = isDiscount ? '' : newPrice;
-    const row = addNewProduct(supplierSheet, productName, newPrice, note, regular);
+    const row = addNewProduct(supplierSheet, productName, listPrice, note, paidPrice, unit);
     existingProducts.push({
-      name: productName, price: newPrice, note: note, regularPrice: regular === '' ? null : regular,
-      isDiscount: isDiscount, rowIndex: row,
+      name: productName, price: listPrice, note: note, isDiscount: isDiscount, unit: unit, rowIndex: row,
     });
-    addToPriceHistory(historySheet, supplierName, productName, null, newPrice, documentDate,
-      isDiscount ? note : '');
+    addToPriceHistory(historySheet, supplierName, productName, null, listPrice, documentDate, note);
     return true;
   }
 
   // ----------------------------------------------------------- existing product
   const oldPrice = existing.price;
-  const wasDiscount = existing.isDiscount;
   const name = existing.name; // keep the catalog's name everywhere
-  Logger.log('"' + productName + '" → "' + name + '" ₪' + oldPrice + ' → ₪' + newPrice +
-             (wasDiscount ? ' [was discount]' : '') + (isDiscount ? ' [discount]' : ''));
+  Logger.log('"' + productName + '" → "' + name + '" list ₪' + oldPrice + ' → ₪' + listPrice +
+             (isDiscount ? ' [discount, paid ₪' + paidPrice + ']' : ''));
 
-  // regular → discount: record the discounted price, no alert
-  if (!wasDiscount && isDiscount) {
-    const note = buildDiscountNote(product);
-    updateProductRow(supplierSheet, existing, newPrice, note, oldPrice);
-    addToPriceHistory(historySheet, supplierName, name, oldPrice, newPrice, documentDate, note);
+  // Prices in different units (per ק״ג vs per יח׳) are not comparable — never alert on them
+  if (unit && existing.unit && unit !== existing.unit) {
+    addToPriceHistory(historySheet, supplierName, name, oldPrice, listPrice, documentDate,
+      '⚠️ יחידה שונה (' + existing.unit + ' ← ' + unit + ') — לא עודכן, בדוק ידנית', true);
+    return false;
+  }
+  if (unit && !existing.unit) {
+    supplierSheet.getRange(existing.rowIndex, COL_UNIT).setValue(unit);
+    existing.unit = unit;
+  }
+
+  // Same list price → only the discount note / paid price may change. No alert.
+  if (Math.abs(listPrice - oldPrice) <= 0.01) {
+    updateProductRow(supplierSheet, existing, listPrice, note, paidPrice);
     return true;
   }
 
-  // discount → regular: discount ended. Compare against the last REGULAR price only.
-  if (wasDiscount && !isDiscount) {
-    const lastRegular = existing.regularPrice;
-    if (lastRegular && Math.abs(newPrice - lastRegular) > 0.01) {
-      return notifyIfLegit(historySheet, supplierSheet, existing, supplierName, name,
-        lastRegular, newPrice, documentDate, 'מחיר רגיל לעומת המחיר הרגיל הקודם (לפני ההנחה)', false);
-    }
-    updateProductRow(supplierSheet, existing, newPrice, '', newPrice);
-    addToPriceHistory(historySheet, supplierName, name, oldPrice, newPrice, documentDate,
-      'מחיר רגיל — ההנחה הקודמת הסתיימה (לא עליית מחיר)');
-    return true;
-  }
-
-  // regular → regular  OR  discount → discount
-  if (Math.abs(newPrice - oldPrice) <= 0.01) {
-    if (isDiscount) {
-      const note = buildDiscountNote(product);
-      if (note !== existing.note) {
-        supplierSheet.getRange(existing.rowIndex, COL_NOTES).setValue(note);
-        existing.note = note;
-      }
-    }
-    return true;
-  }
-
-  return notifyIfLegit(historySheet, supplierSheet, existing, supplierName, name, oldPrice, newPrice,
-    documentDate, isDiscount ? buildDiscountNote(product) : '', isDiscount);
+  // List price changed → real price change
+  return notifyIfLegit(historySheet, supplierSheet, existing, supplierName, name, oldPrice, listPrice,
+    documentDate, note, paidPrice);
 }
 
 /**
  * Real price change: apply the sanity gate, then update + history + email.
  */
 function notifyIfLegit(historySheet, supplierSheet, existing, supplierName, name, oldPrice, newPrice,
-                       documentDate, note, isDiscount) {
+                       documentDate, note, paidPrice) {
   const changePercent = ((newPrice - oldPrice) / oldPrice) * 100;
 
   if (Math.abs(newPrice - oldPrice) / oldPrice > SUSPICIOUS_CHANGE_THRESHOLD) {
@@ -277,13 +369,9 @@ function notifyIfLegit(historySheet, supplierSheet, existing, supplierName, name
     return false;
   }
 
-  if (isDiscount) {
-    updateProductRow(supplierSheet, existing, newPrice, note, null);
-  } else {
-    updateProductRow(supplierSheet, existing, newPrice, '', newPrice);
-  }
+  updateProductRow(supplierSheet, existing, newPrice, note, paidPrice);
   addToPriceHistory(historySheet, supplierName, name, oldPrice, newPrice, documentDate, note);
-  sendPriceChangeEmail(supplierName, name, oldPrice, newPrice, changePercent, isDiscount ? note : '');
+  sendPriceChangeEmail(supplierName, name, oldPrice, newPrice, changePercent, note);
   return true;
 }
 
@@ -292,25 +380,54 @@ function notifyIfLegit(historySheet, supplierSheet, existing, supplierName, name
 // ============================================================================
 
 /**
- * Existing sheet whose name is (with high probability) this supplier — typo tolerant.
+ * Existing sheet that is, with the highest probability, this supplier.
+ *  1. Exact sheet name.
+ *  2. Name match ≥ 0.82 (typos, בע"מ, missing/extra word) → best-scoring sheet.
+ *  3. Name only partly similar (≥ 0.6) → accepted only if the invoice's products
+ *     confirm it: at least half of them (and at least 2) already exist in that sheet.
+ * Returns null only when no existing sheet is a probable match.
  */
-function findSupplierSheet(ss, supplierName) {
+function findSupplierSheet(ss, supplierName, products) {
   if (!supplierName) return null;
   const exact = ss.getSheetByName(supplierName);
   if (exact) return exact;
-  const names = ss.getSheets()
-    .map(function (s) { return s.getName(); })
-    .filter(function (n) { return n !== PRICE_HISTORY_SHEET_NAME; });
-  const match = findBestSupplierMatch_(supplierName, names, 0.82);
-  if (match) {
-    Logger.log('🔗 Supplier "' + supplierName + '" → existing sheet "' + match.name + '" (' + match.score.toFixed(2) + ')');
-    return ss.getSheetByName(match.name);
+
+  const scored = ss.getSheets()
+    .filter(function (s) { return s.getName() !== PRICE_HISTORY_SHEET_NAME; })
+    .map(function (s) { return { sheet: s, score: supplierNameScore_(supplierName, s.getName()) }; })
+    .sort(function (a, b) { return b.score - a.score; });
+
+  if (scored.length && scored[0].score >= 0.82) {
+    Logger.log('🔗 Supplier "' + supplierName + '" → existing sheet "' + scored[0].sheet.getName() +
+               '" (name ' + scored[0].score.toFixed(2) + ')');
+    return scored[0].sheet;
+  }
+
+  // Borderline names: let the products decide
+  const names = (products || []).map(function (p) { return p && p.name; }).filter(Boolean);
+  if (names.length === 0) return null;
+
+  let best = null;
+  scored.filter(function (c) { return c.score >= 0.6; }).forEach(function (c) {
+    const catalog = getExistingProducts(c.sheet);
+    if (catalog.length === 0) return;
+    const hits = names.filter(function (n) { return findProduct(catalog, n, null); }).length;
+    const ratio = hits / names.length;
+    if (hits >= 2 && ratio >= 0.5 && (!best || ratio > best.ratio)) {
+      best = { sheet: c.sheet, ratio: ratio, hits: hits, score: c.score };
+    }
+  });
+
+  if (best) {
+    Logger.log('🔗 Supplier "' + supplierName + '" → existing sheet "' + best.sheet.getName() +
+               '" (name ' + best.score.toFixed(2) + ', ' + best.hits + '/' + names.length + ' products already there)');
+    return best.sheet;
   }
   return null;
 }
 
-function getOrCreateSupplierSheet(ss, supplierName) {
-  let sheet = findSupplierSheet(ss, supplierName);
+function getOrCreateSupplierSheet(ss, supplierName, products) {
+  let sheet = findSupplierSheet(ss, supplierName, products);
   if (!sheet) {
     Logger.log('Creating new sheet: ' + supplierName);
     sheet = ss.insertSheet(supplierName);
@@ -318,20 +435,25 @@ function getOrCreateSupplierSheet(ss, supplierName) {
     sheet.setColumnWidth(2, 150);
     sheet.setColumnWidth(3, 260);
     sheet.setColumnWidth(4, 150);
+    sheet.setColumnWidth(5, 80);
     sheet.setFrozenRows(1);
   }
   return sheet;
 }
 
 function ensureSupplierHeaders(sheet) {
-  const headers = ['שם מוצר', 'מחיר נוכחי לפני מע״מ', 'הערות', 'מחיר רגיל אחרון (ללא הנחה)'];
-  const current = sheet.getRange(1, 1, 1, 4).getValues()[0];
+  const headers = ['שם מוצר', 'מחיר לפני מע״מ (כפי שמופיע בחשבונית)', 'הערות', 'מחיר ששולם בפועל (אחרי הנחה)', 'יחידה'];
+  const current = sheet.getRange(1, 1, 1, NUM_COLS).getValues()[0];
   let changed = false;
-  for (let i = 0; i < 4; i++) {
-    if (!current[i]) { sheet.getRange(1, i + 1).setValue(headers[i]); changed = true; }
+  for (let i = 0; i < NUM_COLS; i++) {
+    // Fill empty headers; replace the old column-D title (its meaning changed)
+    if (!current[i] || (i === COL_REGULAR - 1 && current[i] === 'מחיר רגיל אחרון (ללא הנחה)')) {
+      sheet.getRange(1, i + 1).setValue(headers[i]);
+      changed = true;
+    }
   }
   if (changed) {
-    sheet.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#4285f4')
+    sheet.getRange(1, 1, 1, NUM_COLS).setFontWeight('bold').setBackground('#4285f4')
       .setFontColor('#ffffff').setHorizontalAlignment('center');
   }
 }
@@ -347,7 +469,7 @@ function getExistingProducts(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < PRODUCT_DATA_START_ROW) return [];
 
-  const values = sheet.getRange(PRODUCT_DATA_START_ROW, 1, lastRow - PRODUCT_DATA_START_ROW + 1, 4).getValues();
+  const values = sheet.getRange(PRODUCT_DATA_START_ROW, 1, lastRow - PRODUCT_DATA_START_ROW + 1, NUM_COLS).getValues();
   const products = [];
   values.forEach(function (row, index) {
     const name = row[0];
@@ -355,14 +477,12 @@ function getExistingProducts(sheet) {
     if (!name || String(name).trim() === '' || isNaN(price) || price <= 0) return;
     const note = row[2] ? String(row[2]) : '';
     const isDiscount = note.indexOf(DISCOUNT_NOTE) !== -1;
-    let regular = parseFloat(row[3]);
-    if (isNaN(regular) || regular <= 0) regular = isDiscount ? null : price;
     products.push({
       name: String(name).trim(),
       price: price,
       note: note,
       isDiscount: isDiscount,
-      regularPrice: regular,
+      unit: row[4] ? normalizeUnit(row[4]) : '',
       rowIndex: PRODUCT_DATA_START_ROW + index,
     });
   });
@@ -494,29 +614,29 @@ function productNameScore(a, b) {
 }
 
 /**
- * Update price / note / last regular price of an existing row (and the in-memory copy).
- * regularPrice === null → leave column D as is.
+ * Update list price (B), note (C) and price actually paid (D) of an existing row,
+ * and the in-memory copy.
  */
-function updateProductRow(sheet, existing, newPrice, note, regularPrice) {
-  sheet.getRange(existing.rowIndex, COL_PRICE).setValue(Number(newPrice)).setNumberFormat('0.00');
+function updateProductRow(sheet, existing, listPrice, note, paidPrice) {
+  sheet.getRange(existing.rowIndex, COL_PRICE).setValue(Number(listPrice)).setNumberFormat('0.00');
   sheet.getRange(existing.rowIndex, COL_NOTES).setValue(note || '');
-  if (regularPrice !== null && regularPrice !== undefined && regularPrice !== '') {
-    sheet.getRange(existing.rowIndex, COL_REGULAR).setValue(Number(regularPrice)).setNumberFormat('0.00');
-    existing.regularPrice = Number(regularPrice);
+  if (paidPrice > 0) {
+    sheet.getRange(existing.rowIndex, COL_REGULAR).setValue(Number(paidPrice)).setNumberFormat('0.00');
   }
-  existing.price = Number(newPrice);
+  existing.price = Number(listPrice);
   existing.note = note || '';
   existing.isDiscount = !!note && note.indexOf(DISCOUNT_NOTE) !== -1;
 }
 
-function addNewProduct(sheet, productName, price, note, regularPrice) {
+function addNewProduct(sheet, productName, price, note, paidPrice, unit) {
   const newRow = Math.max(sheet.getLastRow() + 1, PRODUCT_DATA_START_ROW);
   sheet.getRange(newRow, COL_NAME).setValue(String(productName));
   sheet.getRange(newRow, COL_PRICE).setValue(Number(price)).setNumberFormat('0.00');
   if (note) sheet.getRange(newRow, COL_NOTES).setValue(note);
-  if (regularPrice !== '' && regularPrice !== null && regularPrice !== undefined) {
-    sheet.getRange(newRow, COL_REGULAR).setValue(Number(regularPrice)).setNumberFormat('0.00');
+  if (paidPrice > 0) {
+    sheet.getRange(newRow, COL_REGULAR).setValue(Number(paidPrice)).setNumberFormat('0.00');
   }
+  if (unit) sheet.getRange(newRow, COL_UNIT).setValue(unit);
   Logger.log('   Added new row ' + newRow + ': ' + productName + ' @ ₪' + Number(price).toFixed(2) + (note ? ' [' + note + ']' : ''));
   return newRow;
 }

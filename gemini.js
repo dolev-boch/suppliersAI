@@ -135,6 +135,7 @@ const GeminiService = {
         const parsed = this.parseJson(text);
         console.log('🔍 AI raw result:', parsed);
 
+        this.applyPrintedArithmetic(parsed);
         parsed.products = this.cleanProducts(parsed.products || []);
 
         const validated = this.validateResponse(parsed);
@@ -204,6 +205,14 @@ const GeminiService = {
         confidence: this.toNum(raw.confidence) ?? 0,
       };
 
+      // A few agorot of rounding ("הנ: 0.01") is not a discount
+      if (p.discount_applied && this.isTrivialDiscount(p)) {
+        p.discount_applied = false;
+        p.discount_percent = null;
+        p.discount_amount = null;
+        p.price_before_discount = null;
+      }
+
       const key = this.normalizeProductName(p.name);
       if (!map.has(key)) {
         map.set(key, p);
@@ -222,6 +231,102 @@ const GeminiService = {
       e.confidence = Math.min(e.confidence, p.confidence);
     }
     return Array.from(map.values());
+  },
+
+  /**
+   * Recompute every product's net unit price from the numbers COPIED from the invoice,
+   * instead of trusting the AI's own arithmetic (which mis-detected VAT and skipped
+   * discounts). Mutates `result`.
+   *
+   *  - VAT basis: Σ printed line totals vs (total − printed VAT) → before VAT,
+   *               vs total → includes VAT (scale to before-VAT), no VAT → as printed.
+   *  - Net unit price = line total (scaled) ÷ quantity.
+   *  - Discount = qty × printed price − line total (beyond rounding). Percent is
+   *    recorded only when the printed discount number is confirmed as a percent.
+   * If the printed numbers are incomplete or don't reconcile, the AI's values are kept
+   * and the readability gate decides.
+   */
+  applyPrintedArithmetic(result) {
+    const lines = (result.products || []).map((p) => ({
+      p,
+      qty: this.toNum(p.quantity),
+      price: this.toNum(p.printed_unit_price),
+      disc: this.toNum(p.printed_discount),
+      line: this.toNum(p.printed_line_total),
+    }));
+    const usable = lines.filter((l) => l.qty > 0 && l.line !== null);
+    if (usable.length === 0 || usable.length !== lines.filter((l) => l.p.name).length) return;
+
+    const T = Math.abs(this.toNum(result.total_amount) || 0);
+    const V = Math.abs(this.toNum(result.vat_amount) || 0);
+    const other = this.toNum(result.other_charges_before_vat) || 0;
+    const S = usable.reduce((s, l) => s + Math.abs(l.line), 0);
+    if (!T || !S) return;
+
+    const near = (a, b) => Math.abs(a - b) <= Math.max(2, b * 0.01);
+
+    // factor converts a printed line total to "before VAT"
+    let factor = null;
+    let basis = null;
+    if (V > 0) {
+      const ex = T - V;
+      if (near(S + other, ex)) { factor = 1; basis = 'before_vat'; }
+      else if (near(S, T)) { factor = ex / T; basis = 'includes_vat'; }
+    } else if (near(S + other, T)) {
+      factor = 1; basis = 'no_vat';
+    }
+    if (factor === null) {
+      console.warn(`⚠️ Printed line totals (${S.toFixed(2)}) don't reconcile with total ${T} / VAT ${V} — keeping AI values`);
+      return;
+    }
+
+    result.prices_include_vat = basis === 'includes_vat';
+    console.log(`🧮 VAT basis from printed numbers: ${basis} (factor ${factor.toFixed(4)})`);
+
+    usable.forEach(({ p, qty, price, disc, line }) => {
+      const sign = line < 0 ? -1 : 1;
+      const netLine = Math.abs(line) * factor;
+      p.total_before_vat = this.round2(netLine * sign);
+      p.unit_price_before_vat = this.round2(netLine / qty);
+
+      if (price === null || price <= 0) return;
+      const gross = qty * price;
+      const discAmount = gross - Math.abs(line);
+      if (discAmount > Math.max(0.5, gross * 0.01)) {
+        p.discount_applied = true;
+        p.price_before_discount = this.round2(price * factor);
+        p.discount_amount = this.round2(discAmount * factor);
+        // Percent only when the printed discount number is confirmed to be a percent
+        const pctFits = disc > 0 && disc < 100 && Math.abs(gross * (1 - disc / 100) - Math.abs(line)) <= Math.max(0.1, gross * 0.002);
+        p.discount_percent = pctFits || (p.printed_discount_is_percent === true && disc > 0) ? disc : null;
+      } else {
+        // No discount, or only rounding
+        p.discount_applied = false;
+        p.price_before_discount = null;
+        p.discount_amount = null;
+        p.discount_percent = null;
+      }
+    });
+  },
+
+  round2(n) {
+    return Math.round(n * 100) / 100;
+  },
+
+  /**
+   * Rounding adjustment rather than a real discount: under ₪0.50 and under 1%
+   * (or a printed percent under 1%).
+   */
+  isTrivialDiscount(p) {
+    const pct = p.discount_percent;
+    if (pct !== null && pct !== undefined && pct >= 1) return false;
+    let amount = p.discount_amount;
+    if ((amount === null || amount === undefined) && p.price_before_discount && p.unit_price_before_vat && p.quantity) {
+      amount = (p.price_before_discount - p.unit_price_before_vat) * p.quantity;
+    }
+    const lineTotal = p.total_before_vat || (p.unit_price_before_vat || 0) * (p.quantity || 1);
+    if (amount === null || amount === undefined) return pct !== null && pct !== undefined && pct < 1;
+    return Math.abs(amount) < 0.5 && (!lineTotal || Math.abs(amount) / lineTotal < 0.01);
   },
 
   /**
@@ -271,7 +376,23 @@ const GeminiService = {
 ## 4. מוצרים — חלץ את **כל** שורות המוצרים (אין מגבלת כמות)
 לכל מוצר:
 - name: שם המוצר **בדיוק** כפי שמודפס, כולל משקל/נפח/אחוז שומן/גודל (למשל "שמנת 38% 1 ליטר"). אל תקצר ואל "תתקן".
+- item_code: קוד פריט / מק"ט / ברקוד אם מודפס (null אם לא). **קוד פריט הוא לעולם לא מחיר.**
+- **שדות "כפי שמודפס" — העתקה בלבד, בלי שום חישוב, בלי מע"מ, בלי הנחה:**
+  - printed_unit_price: המספר בעמודת "מחיר" של השורה
+  - printed_discount: המספר בעמודת "הנחה" של השורה (או בשורת "הנחה" שמתחתיה), null אם ריק/0
+  - printed_discount_is_percent: true אם ההנחה מודפסת עם % או שהעמודה היא "% הנחה"; false אם בש"ח; null אם לא ברור
+  - printed_line_total: המספר בעמודת "סכום"/"סה"כ" של השורה (הסכום הסופי של השורה כפי שמודפס)
 - quantity, unit (ק״ג, ליטר, יח׳, מארז, גרם, מ״ל...)
+
+### מוצרים שקולים (ירקות, פירות, גבינות במשקל, בשר וכו')
+- שורה בפורמט "3.04x 6.50" או "3.040 × 6.50" = **משקל בק"ג × מחיר לק"ג**. כאן quantity=3.04, unit="ק״ג", unit_price_before_vat=6.50.
+- בקבלות כאלה קוד הפריט (למשל 022) מודפס בנפרד מעל/ליד המחיר — אל תבלבל ביניהם.
+- **בדיקה חובה:** quantity × unit_price ≈ סה"כ השורה. אם לא — קראת לא נכון; קרא שוב.
+- **נרמל תמיד מחיר של מוצר שקול לק"ג:** מחיר ל-100 גרם → כפול 10; מחיר לגרם → כפול 1000; משקל בגרם → חלק ב-1000 (quantity בק"ג). unit="ק״ג".
+- ירקות ופירות טריים בישראל פטורים ממע"מ (מע"מ 0%) — אל תחלק אותם ב-1.18 גם אם הכותרת אומרת "כולל מע"מ".
+
+### עיגול אגורות אינו הנחה
+"הנ: 0.01", "הנ: -0.05" או כל הפרש של אגורות בודדות (פחות מ-0.50 ₪ ופחות מ-1% מהשורה) = **עיגול**, לא הנחה → discount_applied: false, discount_percent: null.
 - unit_price_before_vat: מחיר ליחידה **נטו אחרי הנחה ולפני מע"מ**
 - total_before_vat: סה"כ השורה **אחרי הנחה ולפני מע"מ**
 - discount_applied: true אם יש הנחה על המוצר (שורת "הנחה"/"ה.בש" מתחת לו, עמודת "% הנחה", או הנחה כללית)
@@ -281,10 +402,11 @@ const GeminiService = {
 - confidence: 0-100 — כמה בטוח אתה בשם, בכמות ובמחיר של השורה
 
 ### כלל מע"מ
-חשב Σ(כמות × מחיר מודפס):
-- ≈ הסכום הכולל עם מע"מ → המחירים כוללים מע"מ → חלק כל מחיר וכל סה"כ ב-1.18 (prices_include_vat: true)
-- ≈ הסכום לפני מע"מ → השתמש כמו שכתוב (prices_include_vat: false)
+השווה את **סכום עמודת "סכום" של השורות (אחרי הנחות!)** — לא כמות×מחיר:
+- ≈ הסכום לפני מע"מ / "סה"כ אחרי הנחה" (= סה"כ לתשלום פחות סכום המע"מ) → המחירים **לפני מע"מ** → אל תחלק (prices_include_vat: false). זה המצב ברוב חשבוניות הספקים.
+- ≈ הסכום הכולל לתשלום כולל מע"מ → המחירים כוללים מע"מ → חלק ב-1.18 (prices_include_vat: true). נפוץ בקבלות סופר.
 - אין מע"מ במסמך → כמו שכתוב.
+- vat_amount: העתק את סכום המע"מ **בדיוק כפי שמודפס** (לא לחשב).
 
 ### כלל הנחה לשורה (הכי חשוב)
 מוצר ואחריו שורת "הנחה -X": סה"כ נטו = סה"כ מקורי − X ; מחיר יחידה נטו = סה"כ נטו ÷ כמות.
@@ -331,6 +453,11 @@ const GeminiService = {
   "products": [
     {
       "name": "שם מוצר מלא",
+      "item_code": null,
+      "printed_unit_price": 5.80,
+      "printed_discount": null,
+      "printed_discount_is_percent": null,
+      "printed_line_total": 58.00,
       "quantity": 10,
       "unit": "ק״ג",
       "unit_price_before_vat": 5.80,
@@ -381,11 +508,19 @@ const GeminiService = {
     if (priced.length > 0 && total !== null) {
       const sum = priced.reduce((s, p) => s + p.total_before_vat, 0) + (this.toNum(result.other_charges_before_vat) || 0);
       const absTotal = Math.abs(total);
-      const subtotal = this.toNum(result.subtotal_before_vat);
-      const invDisc = this.toNum(result.invoice_discount_amount) || 0;
+      const vat = Math.abs(this.toNum(result.vat_amount) || 0);
 
-      const candidates = [absTotal / 1.18, absTotal];
-      if (subtotal) candidates.push(Math.abs(subtotal), Math.abs(subtotal) - invDisc);
+      // Prefer printed numbers (total − printed VAT) over the AI's own subtotal, so a
+      // consistent AI mistake (e.g. dividing by 1.18 twice) can't pass this check.
+      let candidates;
+      if (vat > 0) {
+        candidates = [absTotal - vat];
+      } else {
+        const subtotal = this.toNum(result.subtotal_before_vat);
+        const invDisc = this.toNum(result.invoice_discount_amount) || 0;
+        candidates = [absTotal, absTotal / 1.18];
+        if (subtotal) candidates.push(Math.abs(subtotal), Math.abs(subtotal) - invDisc);
+      }
 
       const tolPct = (R.PRODUCTS_SUM_TOLERANCE_PCT ?? 4) / 100;
       const tolAbs = R.PRODUCTS_SUM_TOLERANCE_ABS ?? 3;

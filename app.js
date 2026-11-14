@@ -1204,6 +1204,7 @@ class InvoiceScanner {
       products: validProducts.map((p) => ({
         name: p.name,
         catalog_name: supplierChanged ? null : p.catalog_name || null,
+        item_code: p.item_code || null,
         quantity: p.quantity,
         unit: p.unit,
         unit_price_before_vat: p.unit_price_before_vat,
