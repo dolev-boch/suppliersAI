@@ -15,7 +15,8 @@ const CONFIG = {
   // thinkingLevel instead of the old thinkingBudget. A little thinking ('low') makes
   // the model actually do the discount / VAT arithmetic instead of guessing.
   GENERATION_CONFIG: {
-    thinkingLevel: 'low', // minimal | low | medium | high
+    thinkingLevel: 'LOW', // MINIMAL | LOW | MEDIUM | HIGH — default for text-only helper calls
+    extractionThinkingLevel: 'MEDIUM', // main invoice reading: more thinking = more careful reading
     maxOutputTokens: 32768, // thinking tokens count toward this limit
   },
 
@@ -25,6 +26,9 @@ const CONFIG = {
     MIN_SUPPLIER_CONFIDENCE: 75,
     MIN_TOTAL_CONFIDENCE: 75,
     MIN_PRODUCT_CONFIDENCE: 70,
+    // Product names: own certainty AND agreement of two independent readings must be ≥ this.
+    // A name below it is accepted only if it matches a product already in the supplier's sheet.
+    MIN_NAME_CERTAINTY: 90,
     // Sum of product lines must match the invoice subtotal within this tolerance
     PRODUCTS_SUM_TOLERANCE_PCT: 4,
     PRODUCTS_SUM_TOLERANCE_ABS: 3,

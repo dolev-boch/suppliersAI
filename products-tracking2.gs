@@ -91,7 +91,7 @@ function doGet(e) {
       const sheet = findSupplierSheet(ss, params.supplier || '');
       if (!sheet) return jsonOut({ success: true, sheet_name: null, products: [] });
       const products = getExistingProducts(sheet).map(function (p) {
-        return { name: p.name, price: p.price, note: p.note };
+        return { name: p.name, price: p.price, note: p.note, unit: p.unit };
       });
       return jsonOut({ success: true, sheet_name: sheet.getName(), products: products });
     } catch (err) {
@@ -329,6 +329,11 @@ function processProduct(supplierSheet, historySheet, existingProducts, product, 
   }
 
   // ----------------------------------------------------------- existing product
+  // Self-correction: this name was read with verified certainty (two independent readings
+  // agreed ≥90%) but the row holds a different name → the stored one was an old misread.
+  maybeCorrectProductName(supplierSheet, historySheet, existingProducts, existing, product,
+    productName, supplierName, documentDate);
+
   const oldPrice = existing.price;
   const name = existing.name; // keep the catalog's name everywhere
   Logger.log('"' + productName + '" → "' + name + '" list ₪' + oldPrice + ' → ₪' + listPrice +
@@ -354,6 +359,32 @@ function processProduct(supplierSheet, historySheet, existingProducts, product, 
   // List price changed → real price change
   return notifyIfLegit(historySheet, supplierSheet, existing, supplierName, name, oldPrice, listPrice,
     documentDate, note, paidPrice);
+}
+
+/**
+ * Rename an existing row to the verified reading of the invoice, so old misread names
+ * ("שמנת קרט טבעי") fix themselves on the next clear scan — no manual edits.
+ * Only when: the app verified the name, the names really differ, sizes/percentages
+ * don't conflict, and no other row already has that name.
+ */
+function maybeCorrectProductName(sheet, historySheet, existingProducts, existing, product, productName,
+                                 supplierName, documentDate) {
+  const verified = product.name_verified === true || product.name_verified === 'true';
+  if (!verified) return;
+  const target = normalizeProductName(productName);
+  if (!target || target === normalizeProductName(existing.name)) return;
+  if (numbersConflict(productName, existing.name)) return;
+  const taken = existingProducts.some(function (p) {
+    return p !== existing && normalizeProductName(p.name) === target;
+  });
+  if (taken) return;
+
+  const oldName = existing.name;
+  sheet.getRange(existing.rowIndex, COL_NAME).setValue(productName);
+  existing.name = productName;
+  addToPriceHistory(historySheet, supplierName, productName, null, existing.price, documentDate,
+    '✏️ שם תוקן אוטומטית מ-"' + oldName + '" (קריאה מאומתת מהחשבונית)');
+  Logger.log('✏️ Renamed "' + oldName + '" → "' + productName + '"');
 }
 
 /**

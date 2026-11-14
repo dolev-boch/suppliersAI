@@ -16,21 +16,33 @@ const GeminiService = {
    */
   buildGenerationConfig(overrides = {}) {
     const gc = CONFIG.GENERATION_CONFIG || {};
-    return {
+    const config = {
       maxOutputTokens: gc.maxOutputTokens || 32768,
       responseMimeType: 'application/json',
-      thinkingConfig: { thinkingLevel: overrides.thinkingLevel || gc.thinkingLevel || 'low' },
+      thinkingConfig: {
+        thinkingLevel: String(overrides.thinkingLevel || gc.thinkingLevel || 'LOW').toUpperCase(),
+      },
     };
+    // Enforced structured output (JSON Schema) — the model can't drop/rename fields
+    if (overrides.schema && this.jsonSchemaSupported !== false) {
+      config.responseJsonSchema = overrides.schema;
+    }
+    // High resolution for images: the default down-scales the photo, which blurs small
+    // Hebrew letters on thermal receipts and makes the model "guess" product names.
+    if (overrides.highResImage && this.mediaResolutionSupported !== false) {
+      config.mediaResolution = 'MEDIA_RESOLUTION_HIGH';
+    }
+    return config;
   },
 
   /**
    * Low-level call to generateContent. Returns { text, usage, finishReason }.
    */
-  async callGemini(parts, { timeoutMs = 60000, thinkingLevel } = {}) {
+  async callGemini(parts, { timeoutMs = 60000, thinkingLevel, highResImage = false, schema = null } = {}) {
     const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
     const requestBody = {
       contents: [{ parts }],
-      generationConfig: this.buildGenerationConfig({ thinkingLevel }),
+      generationConfig: this.buildGenerationConfig({ thinkingLevel, highResImage, schema }),
     };
 
     const controller = new AbortController();
@@ -51,6 +63,20 @@ const GeminiService = {
           errorMsg = errorData.error?.message || errorMsg;
         } catch (_) {}
         if (response.status === 429) throw new Error('429 Rate limit exceeded');
+        // If this model rejects mediaResolution, remember that and retry once without it
+        if (response.status === 400 && requestBody.generationConfig.mediaResolution && /media.?resolution/i.test(errorMsg)) {
+          console.warn('⚠️ mediaResolution not supported by this model — retrying without it');
+          this.mediaResolutionSupported = false;
+          clearTimeout(timeoutId);
+          return this.callGemini(parts, { timeoutMs, thinkingLevel, highResImage: false, schema });
+        }
+        // Same safety net for the JSON schema (prompt still describes the JSON shape)
+        if (response.status === 400 && requestBody.generationConfig.responseJsonSchema && /schema/i.test(errorMsg)) {
+          console.warn('⚠️ JSON schema rejected — retrying without it:', errorMsg);
+          this.jsonSchemaSupported = false;
+          clearTimeout(timeoutId);
+          return this.callGemini(parts, { timeoutMs, thinkingLevel, highResImage, schema: null });
+        }
         throw new Error(errorMsg);
       }
 
@@ -98,7 +124,7 @@ const GeminiService = {
    */
   async performAnalysis(base64Image, onProgress = null, mimeType = 'image/jpeg') {
     const MAX_RETRIES = 3;
-    const TIMEOUT_MS = 60000; // thinking ('low') needs a bit more time than before
+    const TIMEOUT_MS = 90000; // high-res image + MEDIUM thinking
     const RETRY_DELAYS = [1000, 2500];
 
     let lastError = null;
@@ -117,13 +143,28 @@ const GeminiService = {
         if (onProgress)
           onProgress({ status: 'analyzing', attempt: attempt + 1, total: MAX_RETRIES, message });
 
-        const { text, usage, finishReason } = await this.callGemini(
-          [
-            { text: this.buildPrompt() },
-            { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } },
-          ],
-          { timeoutMs: TIMEOUT_MS }
-        );
+        const imagePart = { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } };
+
+        // Main extraction + an independent second reading of the product names, in parallel.
+        // A name is trusted only when both readings agree (see verifyProductNames).
+        const [main, second] = await Promise.all([
+          this.callGemini([{ text: this.buildPrompt() }, imagePart], {
+            timeoutMs: TIMEOUT_MS,
+            highResImage: true,
+            thinkingLevel: CONFIG.GENERATION_CONFIG?.extractionThinkingLevel || 'MEDIUM',
+            schema: this.extractionSchema(),
+          }),
+          this.callGemini([{ text: this.buildNamesPrompt() }, imagePart], {
+            timeoutMs: TIMEOUT_MS,
+            highResImage: true,
+            thinkingLevel: 'LOW',
+            schema: this.namesSchema(),
+          }).catch((err) => {
+            console.warn('⚠️ Second name reading failed:', err.message);
+            return null;
+          }),
+        ]);
+        const { text, usage, finishReason } = main;
 
         console.log('✅ Gemini Response received', { usage, finishReason });
 
@@ -137,6 +178,18 @@ const GeminiService = {
 
         this.applyPrintedArithmetic(parsed);
         parsed.products = this.cleanProducts(parsed.products || []);
+
+        let secondNames = null;
+        if (second && second.text) {
+          try {
+            secondNames = (this.parseJson(second.text).products || [])
+              .map((p) => p && p.name)
+              .filter(Boolean);
+          } catch (_) {
+            secondNames = null;
+          }
+        }
+        this.verifyProductNames(parsed.products, secondNames);
 
         const validated = this.validateResponse(parsed);
         validated.readability = this.assessReadability(validated);
@@ -203,6 +256,7 @@ const GeminiService = {
         discount_percent: this.toNum(raw.discount_percent),
         discount_applied: raw.discount_applied === true || raw.discount_applied === 'true',
         confidence: this.toNum(raw.confidence) ?? 0,
+        name_confidence: this.toNum(raw.name_confidence) ?? this.toNum(raw.confidence) ?? 0,
       };
 
       // A few agorot of rounding ("הנ: 0.01") is not a discount
@@ -229,6 +283,7 @@ const GeminiService = {
       e.discount_amount = (e.discount_amount || 0) + (p.discount_amount || 0) || null;
       if (e.discount_percent !== p.discount_percent) e.discount_percent = e.discount_percent ?? p.discount_percent;
       e.confidence = Math.min(e.confidence, p.confidence);
+      e.name_confidence = Math.min(e.name_confidence, p.name_confidence);
     }
     return Array.from(map.values());
   },
@@ -314,6 +369,147 @@ const GeminiService = {
   },
 
   /**
+   * JSON Schema for the main extraction (enforced via responseJsonSchema).
+   * Field order = reading order: the model copies printed values before computing.
+   */
+  extractionSchema() {
+    const num = (description) => ({ type: ['number', 'null'], description });
+    const str = (description) => ({ type: ['string', 'null'], description });
+    const conf = (description) => ({ type: 'integer', minimum: 0, maximum: 100, description });
+    return {
+      type: 'object',
+      properties: {
+        is_readable: { type: 'boolean', description: 'false if supplier, total or product lines cannot be read with certainty' },
+        unreadable_reason: str('Short Hebrew reason when is_readable is false'),
+        supplier_name_raw: { type: 'string', description: 'Issuer name exactly as printed (not the customer after לכבוד)' },
+        supplier_category: { type: 'string', enum: ['priority', 'fuel_station', 'supermarket', 'nursery', 'other'] },
+        supplier_name: { type: 'string', description: 'Name from the known-suppliers list if it matches, else the printed name without בע"מ' },
+        supplier_confidence: conf('Certainty of the supplier name'),
+        document_type: { type: 'string', enum: ['invoice', 'delivery_note', 'credit_invoice'] },
+        document_number: str('Exactly as printed next to the document title'),
+        document_number_confidence: conf('Certainty of the document number'),
+        document_date: str('DD/MM/YYYY'),
+        date_confidence: conf('Certainty of the date'),
+        total_amount: str('Final total to pay incl. VAT, as printed (negative for credit invoice)'),
+        total_confidence: conf('Certainty of the total'),
+        vat_amount: num('VAT amount exactly as printed'),
+        subtotal_before_vat: num('Subtotal before VAT as printed'),
+        prices_include_vat: { type: ['boolean', 'null'] },
+        invoice_discount_amount: num('Whole-invoice discount in ₪ before VAT'),
+        invoice_discount_percent: num('Whole-invoice discount percent if printed'),
+        other_charges_before_vat: num('Delivery/deposit/rounding charges before VAT'),
+        credit_card_last4: str('4 digits, null for priority suppliers'),
+        credit_card_confidence: conf('Certainty of the card digits'),
+        notes: str('Extra notes ("חשבונית זיכוי" for credit invoices)'),
+        products: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Product name copied letter by letter as printed. Never replace an unclear word with a different real word.' },
+              name_confidence: conf('Certainty of EVERY letter of the name; below 90 if any letter is unclear'),
+              item_code: str('Item code / barcode if printed — never a price'),
+              quantity: num('Quantity (kg for weighed goods)'),
+              unit: str('ק״ג / יח׳ / ליטר / מארז ...'),
+              printed_unit_price: num('Number in the price column, copied as printed'),
+              printed_discount: num('Number in the discount column / discount line, as printed'),
+              printed_discount_is_percent: { type: ['boolean', 'null'] },
+              printed_line_total: num('Number in the line total column, as printed'),
+              unit_price_before_vat: num('Net unit price after discount, before VAT'),
+              total_before_vat: num('Net line total after discount, before VAT'),
+              discount_applied: { type: 'boolean' },
+              price_before_discount: num('Unit price before discount, before VAT'),
+              discount_percent: num('Discount percent only if printed'),
+              discount_amount: num('Line discount in ₪ before VAT'),
+              confidence: conf('Certainty of quantity and prices of this line'),
+            },
+            required: ['name', 'name_confidence', 'quantity', 'printed_unit_price', 'printed_line_total', 'discount_applied', 'confidence'],
+          },
+        },
+      },
+      required: [
+        'is_readable', 'supplier_name_raw', 'supplier_category', 'supplier_name', 'supplier_confidence',
+        'document_type', 'document_number', 'document_date', 'total_amount', 'total_confidence', 'products',
+      ],
+    };
+  },
+
+  namesSchema() {
+    return {
+      type: 'object',
+      properties: {
+        products: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { name: { type: 'string', description: 'Product name copied letter by letter as printed' } },
+            required: ['name'],
+          },
+        },
+      },
+      required: ['products'],
+    };
+  },
+
+  /**
+   * Prompt for the independent second reading — product names only.
+   */
+  buildNamesPrompt() {
+    return `קרא מתוך החשבונית/תעודת המשלוח בתמונה **רק את שמות המוצרים** בטבלת המוצרים.
+- העתק כל שם **אות אחר אות בדיוק כפי שמודפס**, כולל מספרים, אחוזים וקיצורים (ק"ג, 1 ק, 5 ל').
+- **אסור** להחליף מילה לא ברורה במילה הגיונית אחרת. אם אות לא ברורה — כתוב את הקריאה הכי סבירה של האותיות עצמן.
+- אל תכלול קוד פריט/ברקוד, כמויות, מחירים, שורות הנחה, סיכומים.
+החזר JSON בלבד: {"products":[{"name":"..."}]}`;
+  },
+
+  /** Normalized form for comparing two readings of the same name */
+  nameKey(name) {
+    return this.normalizeProductName(name)
+      .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
+      .replace(/\s+/g, '');
+  },
+
+  /**
+   * Mark each product name as verified when:
+   *  - the model's own name_confidence is ≥ 90, AND
+   *  - an independent second reading contains the same name (≥ 90% similar).
+   * Sets p.name_verified, p.name_agreement, p.name_second_reading.
+   */
+  verifyProductNames(products, secondNames) {
+    const MIN = CONFIG.READABILITY?.MIN_NAME_CERTAINTY ?? 90;
+    const keys = (secondNames || []).map((n) => ({ n, k: this.nameKey(n) }));
+    products.forEach((p) => {
+      const own = this.toNum(p.name_confidence) ?? this.toNum(p.confidence) ?? 0;
+      let agreement = null;
+      let alt = null;
+      if (secondNames) {
+        const k = this.nameKey(p.name);
+        agreement = 0;
+        keys.forEach((s) => {
+          const sim = k === s.k ? 1 : SupplierMatcher.calculateSimilarity(k, s.k);
+          if (sim > agreement) { agreement = sim; alt = s.n; }
+        });
+        agreement = Math.round(agreement * 100);
+      }
+      p.name_agreement = agreement;
+      p.name_second_reading = alt;
+      p.name_verified = own >= MIN && (agreement === null || agreement >= MIN);
+      if (!p.name_verified) {
+        console.warn(`⚠️ Uncertain name "${p.name}" (own ${own}%, second reading "${alt}" ${agreement}%)`);
+      }
+    });
+  },
+
+  /**
+   * Products whose name is not certain and that did not match an existing catalog
+   * product. Non-empty → ask the user to photograph again.
+   */
+  unverifiedProductNames(result) {
+    if (result.productsDisabled) return [];
+    return (result.products || []).filter((p) => !p.name_verified && !p.catalog_name);
+  },
+
+  /**
    * Rounding adjustment rather than a real discount: under ₪0.50 and under 1%
    * (or a printed percent under 1%).
    */
@@ -375,7 +571,10 @@ const GeminiService = {
 
 ## 4. מוצרים — חלץ את **כל** שורות המוצרים (אין מגבלת כמות)
 לכל מוצר:
-- name: שם המוצר **בדיוק** כפי שמודפס, כולל משקל/נפח/אחוז שומן/גודל (למשל "שמנת 38% 1 ליטר"). אל תקצר ואל "תתקן".
+- name: שם המוצר **אות אחר אות בדיוק** כפי שמודפס, כולל משקל/נפח/אחוז/גודל, קיצורים וגרשיים. אל תקצר, אל תשלים ואל "תתקן".
+  **אסור להמציא:** אם מילה או אות לא ברורה — אל תחליף אותה במילה אחרת שנשמעת הגיונית, ואל תנחש שם מוצר מוכר. כתוב רק את האותיות שאתה רואה בפועל והורד את name_confidence.
+  שים לב במיוחד לקיצורים עם גרשיים (כמו יחידות מידה) ולאותיות עבריות דומות בצורתן — אלה המקומות שבהם קריאה שגויה נפוצה.
+- name_confidence: 0-100 — כמה אתה בטוח ב**כל אות** של השם. מתחת ל-90 אם יש ולו אות אחת שלא ראית בבירור.
 - item_code: קוד פריט / מק"ט / ברקוד אם מודפס (null אם לא). **קוד פריט הוא לעולם לא מחיר.**
 - **שדות "כפי שמודפס" — העתקה בלבד, בלי שום חישוב, בלי מע"מ, בלי הנחה:**
   - printed_unit_price: המספר בעמודת "מחיר" של השורה
@@ -385,8 +584,8 @@ const GeminiService = {
 - quantity, unit (ק״ג, ליטר, יח׳, מארז, גרם, מ״ל...)
 
 ### מוצרים שקולים (ירקות, פירות, גבינות במשקל, בשר וכו')
-- שורה בפורמט "3.04x 6.50" או "3.040 × 6.50" = **משקל בק"ג × מחיר לק"ג**. כאן quantity=3.04, unit="ק״ג", unit_price_before_vat=6.50.
-- בקבלות כאלה קוד הפריט (למשל 022) מודפס בנפרד מעל/ליד המחיר — אל תבלבל ביניהם.
+- שורה בפורמט "משקל x מחיר" (למשל "W x P" או "W × P") = **משקל בק"ג × מחיר לק"ג**: quantity=W, unit="ק״ג", printed_unit_price=P.
+- קוד פריט/ברקוד עשוי להיות מודפס בנפרד מעל או ליד המחיר — אל תבלבל ביניהם.
 - **בדיקה חובה:** quantity × unit_price ≈ סה"כ השורה. אם לא — קראת לא נכון; קרא שוב.
 - **נרמל תמיד מחיר של מוצר שקול לק"ג:** מחיר ל-100 גרם → כפול 10; מחיר לגרם → כפול 1000; משקל בגרם → חלק ב-1000 (quantity בק"ג). unit="ק״ג".
 - ירקות ופירות טריים בישראל פטורים ממע"מ (מע"מ 0%) — אל תחלק אותם ב-1.18 גם אם הכותרת אומרת "כולל מע"מ".
@@ -409,12 +608,10 @@ const GeminiService = {
 - vat_amount: העתק את סכום המע"מ **בדיוק כפי שמודפס** (לא לחשב).
 
 ### כלל הנחה לשורה (הכי חשוב)
-מוצר ואחריו שורת "הנחה -X": סה"כ נטו = סה"כ מקורי − X ; מחיר יחידה נטו = סה"כ נטו ÷ כמות.
-דוגמה: גרנד פדנו מגורד | כמות 2 | מחיר 96.83 | סה"כ 193.66, ושורה "הנחה -15.00"
-→ unit_price_before_vat 89.33, total_before_vat 178.66, discount_applied true, price_before_discount 96.83, discount_amount 15.00, discount_percent null
-דוגמה עם אחוז: שמנת | כמות 8 | מחיר 36.90 | הנחה 10% | נטו 265.68
-→ unit_price_before_vat 33.21, total_before_vat 265.68, discount_applied true, price_before_discount 36.90, discount_amount 29.52, discount_percent 10
-אם יש עמודת "מחיר נטו" — השתמש בה כמחיר אחרי הנחה.
+- הנחה יכולה להופיע כעמודה בשורת המוצר או כשורה נפרדת מתחתיו ("הנחה -X"). שורת הנחה שייכת למוצר שמעליה.
+- סה"כ נטו לשורה = סה"כ מקורי − ההנחה ; מחיר יחידה נטו = סה"כ נטו ÷ כמות.
+- אם יש עמודת "מחיר נטו" — זה המחיר אחרי הנחה.
+- הערה: המערכת מחשבת בעצמה מחדש את המחירים מתוך השדות printed_* — הקפד בעיקר שהם מועתקים נכון.
 
 ### הנחה כללית על כל החשבונית
 אם מודפס אחוז (למשל "הנחה 5%") → החל אותו על כל מוצר (unit_price ו-total אחרי הנחה), discount_applied true, discount_percent 5.
@@ -453,6 +650,7 @@ const GeminiService = {
   "products": [
     {
       "name": "שם מוצר מלא",
+      "name_confidence": 95,
       "item_code": null,
       "printed_unit_price": 5.80,
       "printed_discount": null,
@@ -553,25 +751,46 @@ const GeminiService = {
       if (!catalog || !catalog.success) return result;
 
       if (catalog.sheet_name) result.products_sheet_name = catalog.sheet_name;
-      const names = (catalog.products || []).map((p) => p.name).filter(Boolean);
+      const items = (catalog.products || []).filter((p) => p && p.name);
+      const names = items.map((p) => p.name);
       if (names.length === 0) return result;
 
-      const prompt = `התאם בין שמות מוצרים מחשבונית של הספק "${catalog.sheet_name || result.supplier_name}" לבין קטלוג המוצרים הקיים של אותו ספק.
-התאם רק אם זה **אותו מוצר בדיוק** (קיצור, שגיאת כתיב, סדר מילים שונה, תוספת/השמטת מילה כמו "ק"ג" או מותג — בסדר).
-**אל תתאים** אם יש הבדל מהותי: גודל/משקל/נפח שונה, אחוז שומן שונה, טעם/סוג/צבע שונה, מוצר אחר.
-אם אין התאמה ודאית → null.
+      const fmt = (v) => (v > 0 ? `₪${Number(v).toFixed(2)}` : '—');
+      const listPrice = (p) => (p.discount_applied && p.price_before_discount > 0 ? p.price_before_discount : p.unit_price_before_vat);
 
-קטלוג:
-${names.map((n, i) => `${i}: ${n}`).join('\n')}
+      const prompt = `התאם בין שורות מחשבונית של הספק "${catalog.sheet_name || result.supplier_name}" לבין קטלוג המוצרים הקיים של אותו ספק.
+שמות בחשבונית נקראו מצילום ועלולים להכיל שגיאות קריאה (אות מוחלפת, מילה משובשת). גם שמות בקטלוג עלולים להיות שגיאות קריאה ישנות.
+התאם כשזה **אותו מוצר** — קיצור, שגיאת כתיב/קריאה, סדר מילים שונה, תוספת/השמטת מילה.
+ראיות חזקות לאותו מוצר: אותו מחיר (או קרוב), אותה יחידה, שם דומה באותיות.
+**אל תתאים** כשיש הבדל מהותי: גודל/משקל/נפח שונה, אחוז שומן שונה, טעם/סוג/צבע שונה.
+אם אין התאמה סבירה → null.
 
-מוצרים מהחשבונית:
-${products.map((p, i) => `${i}: ${p.name}`).join('\n')}
+קטלוג (אינדקס: שם | מחיר | יחידה):
+${items.map((p, i) => `${i}: ${p.name} | ${fmt(p.price)} | ${p.unit || '—'}`).join('\n')}
 
-החזר JSON בלבד: {"matches":[{"invoice":0,"catalog":3},{"invoice":1,"catalog":null}]}`;
+שורות מהחשבונית (אינדקס: שם | קריאה שנייה | מחיר | יחידה):
+${products.map((p, i) => `${i}: ${p.name} | ${p.name_second_reading || '—'} | ${fmt(listPrice(p))} | ${p.unit || '—'}`).join('\n')}`;
 
       const { text } = await this.callGemini([{ text: prompt }], {
-        timeoutMs: 25000,
-        thinkingLevel: 'low',
+        timeoutMs: 30000,
+        thinkingLevel: 'LOW',
+        schema: {
+          type: 'object',
+          properties: {
+            matches: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  invoice: { type: 'integer', description: 'Invoice line index' },
+                  catalog: { type: ['integer', 'null'], description: 'Catalog index of the same product, or null' },
+                },
+                required: ['invoice', 'catalog'],
+              },
+            },
+          },
+          required: ['matches'],
+        },
       });
       const parsed = this.parseJson(text);
 

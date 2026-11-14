@@ -227,6 +227,38 @@ class InvoiceScanner {
   }
 
   /**
+   * Prepare a photo for the AI, following Gemini's image guidance:
+   *  - correctly rotated (browsers apply the EXIF orientation when drawing to canvas),
+   *  - large enough for small print but capped at 3072px (4×768 tiles) to stay fast,
+   *  - high-quality JPEG (no heavy compression that smears letters).
+   * Falls back to the original image if anything fails.
+   */
+  prepareImageForAI(dataUrl) {
+    const original = { base64: dataUrl.split(',')[1], mime: dataUrl.slice(5, dataUrl.indexOf(';')) || 'image/jpeg' };
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const MAX = 3072;
+          const ratio = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight, 1);
+          const W = Math.round(img.naturalWidth * ratio);
+          const H = Math.round(img.naturalHeight * ratio);
+          const canvas = document.createElement('canvas');
+          canvas.width = W;
+          canvas.height = H;
+          canvas.getContext('2d').drawImage(img, 0, 0, W, H);
+          resolve({ base64: canvas.toDataURL('image/jpeg', 0.92).split(',')[1], mime: 'image/jpeg' });
+        } catch (err) {
+          console.warn('Image prep failed, using original:', err);
+          resolve(original);
+        }
+      };
+      img.onerror = () => resolve(original);
+      img.src = dataUrl;
+    });
+  }
+
+  /**
    * Handle file selection
    */
   handleFile(file) {
@@ -238,10 +270,14 @@ class InvoiceScanner {
     this.selectedFile = file;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       this.elements.previewImage.src = e.target.result;
       this.elements.previewContainer.style.display = 'block';
-      this.imageBase64 = e.target.result.split(',')[1];
+
+      // Upright + size-capped JPEG for the AI (phone photos are often rotated via EXIF only)
+      const prepared = await this.prepareImageForAI(e.target.result);
+      this.imageBase64 = prepared.base64;
+      this.imageMime = prepared.mime;
 
       // Hide upload zone and show preview
       this.elements.uploadZone.style.display = 'none';
@@ -295,7 +331,7 @@ class InvoiceScanner {
         (progress) => {
           if (loadingText) loadingText.textContent = progress.message || 'מנתח חשבונית...';
         },
-        this.selectedFile?.type || 'image/jpeg'
+        this.imageMime || this.selectedFile?.type || 'image/jpeg'
       );
       this.currentResult = result;
       this.editedData = {}; // Reset edited data
@@ -316,6 +352,21 @@ class InvoiceScanner {
       // Map product names to this supplier's existing catalog
       if (loadingText) loadingText.textContent = 'מתאים מוצרים לקטלוג הספק...';
       await GeminiService.matchProductsToCatalog(result);
+
+      // Name gate — never save an invented product name
+      const uncertainNames = GeminiService.unverifiedProductNames(result);
+      if (uncertainNames.length > 0) {
+        this.stopLoadingProgress();
+        this.showRescanPrompt([
+          'שמות מוצרים לא נקראו בוודאות של 90% לפחות:',
+          ...uncertainNames.map((p) =>
+            p.name_second_reading && p.name_second_reading !== p.name
+              ? `"${p.name}" / "${p.name_second_reading}"`
+              : `"${p.name}"`
+          ),
+        ]);
+        return;
+      }
 
       // Stop progress updates
       this.stopLoadingProgress();
@@ -1026,11 +1077,17 @@ class InvoiceScanner {
         const progressPercent = ((fileNum - 1) / files.length) * 100;
         this.elements.bulkProgressFill.style.width = `${progressPercent}%`;
 
-        // Read file as base64
-        const base64Image = await this.readFileAsBase64(file);
+        // Read file as base64 (images: upright, size-capped JPEG; PDFs: as is)
+        let base64Image = await this.readFileAsBase64(file);
+        let mime = file.type || 'image/jpeg';
+        if (mime.startsWith('image/')) {
+          const prepared = await this.prepareImageForAI(`data:${mime};base64,${base64Image}`);
+          base64Image = prepared.base64;
+          mime = prepared.mime;
+        }
 
         // Analyze with Gemini (pass the real MIME type — PDFs must not be sent as JPEG)
-        const result = await GeminiService.analyzeInvoice(base64Image, null, file.type || 'image/jpeg');
+        const result = await GeminiService.analyzeInvoice(base64Image, null, mime);
 
         // Never save a guessed invoice
         if (!result.readability.ok) {
@@ -1204,6 +1261,8 @@ class InvoiceScanner {
       products: validProducts.map((p) => ({
         name: p.name,
         catalog_name: supplierChanged ? null : p.catalog_name || null,
+        // Both independent readings agreed (≥90%) — the sheet may use it to fix an old misread name
+        name_verified: !!p.name_verified,
         item_code: p.item_code || null,
         quantity: p.quantity,
         unit: p.unit,
@@ -1294,7 +1353,7 @@ class InvoiceScanner {
     try {
       const processed = await this.processImageForDrive(
         this.imageBase64,
-        this.selectedFile?.type
+        this.imageMime || this.selectedFile?.type
       );
       console.log(`🖨️ Image processed for Drive: ${processed.mime}`);
 
