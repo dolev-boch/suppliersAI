@@ -8,6 +8,13 @@ const CONFIG = {
   // Gemini 3.5 Flash-Lite (stable). Replaces gemini-2.5-flash / 2.5-flash-lite.
   GEMINI_MODEL: 'gemini-3.5-flash-lite',
 
+  // Model that READS the invoice image (main extraction + name tie-break).
+  // Gemini 4 Hydrogen = Gemini 4's speed tier: $1.50 / $7.50 per 1M tokens — the same price
+  // as gemini-3.8-flash from Jan 2027, a generation newer and much better at reading print.
+  // GEMINI_MODEL (Flash-Lite) stays for cheap helper calls (table detection, catalog
+  // matching) and is the automatic fallback if this model is unavailable.
+  VISION_MODEL: 'gemini-4-hydrogen',
+
   GEMINI_API_KEY: '', // Will be loaded from /api/config endpoint
 
   // Generation configuration for Gemini 3.x.
@@ -16,7 +23,7 @@ const CONFIG = {
   // the model actually do the discount / VAT arithmetic instead of guessing.
   GENERATION_CONFIG: {
     thinkingLevel: 'LOW', // MINIMAL | LOW | MEDIUM | HIGH — default for text-only helper calls
-    extractionThinkingLevel: 'MEDIUM', // main invoice reading: more thinking = more careful reading
+    extractionThinkingLevel: 'LOW', // main invoice reading — LOW keeps scans fast
     maxOutputTokens: 32768, // thinking tokens count toward this limit
   },
 

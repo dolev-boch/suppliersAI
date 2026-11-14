@@ -38,8 +38,10 @@ const GeminiService = {
   /**
    * Low-level call to generateContent. Returns { text, usage, finishReason }.
    */
-  async callGemini(parts, { timeoutMs = 60000, thinkingLevel, highResImage = false, schema = null } = {}) {
-    const apiUrl = `${CONFIG.GEMINI_API_URL}/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+  async callGemini(parts, { timeoutMs = 60000, thinkingLevel, highResImage = false, schema = null, model = null } = {}) {
+    // A requested model that turned out unavailable falls back to the default model
+    const useModel = model && !(this.unavailableModels || {})[model] ? model : CONFIG.GEMINI_MODEL;
+    const apiUrl = `${CONFIG.GEMINI_API_URL}/${useModel}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
     const requestBody = {
       contents: [{ parts }],
       generationConfig: this.buildGenerationConfig({ thinkingLevel, highResImage, schema }),
@@ -63,6 +65,13 @@ const GeminiService = {
           errorMsg = errorData.error?.message || errorMsg;
         } catch (_) {}
         if (response.status === 429) throw new Error('429 Rate limit exceeded');
+        // Model not available for this key/region → remember and retry with the default model
+        if (useModel !== CONFIG.GEMINI_MODEL && (response.status === 404 || /not found|not supported|unknown model/i.test(errorMsg))) {
+          console.warn(`⚠️ Model ${useModel} unavailable (${errorMsg}) — using ${CONFIG.GEMINI_MODEL}`);
+          this.unavailableModels = { ...(this.unavailableModels || {}), [useModel]: true };
+          clearTimeout(timeoutId);
+          return this.callGemini(parts, { timeoutMs, thinkingLevel, highResImage, schema, model: null });
+        }
         // If this model rejects mediaResolution, remember that and retry once without it
         if (response.status === 400 && requestBody.generationConfig.mediaResolution && /media.?resolution/i.test(errorMsg)) {
           console.warn('⚠️ mediaResolution not supported by this model — retrying without it');
@@ -128,7 +137,8 @@ const GeminiService = {
     const RETRY_DELAYS = [1000, 2500];
 
     let lastError = null;
-    let ocr; // undefined = not tried yet; null = unavailable; object = OCR result
+    let tableTask = null; // Promise<{crop, part} | null> — enlarged crop of the product table
+    let ocrTask = null; // Promise<{lines, part} | null> — OCR of the product table
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
@@ -146,27 +156,39 @@ const GeminiService = {
 
         const imagePart = { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } };
 
-        // 1) OCR (Cloud Vision) — exact characters. Done once, reused on retries.
-        if (ocr === undefined) {
-          if (onProgress) onProgress({ status: 'analyzing', message: 'מזהה טקסט (OCR)...' });
-          ocr = await this.runOcr(base64Image, mimeType);
+        // 1) Locate the product table and make an enlarged, contrast-enhanced crop of it
+        //    (Flash-Lite, minimal thinking — fast and cheap). Done once per scan.
+        if (!tableTask) tableTask = this.prepareTableCrop(base64Image, mimeType, imagePart);
+        // 2) Two INDEPENDENT readings in parallel — Gemini never sees the OCR text, so
+        //    their mistakes are not shared:
+        //    A) Gemini (VISION_MODEL) reads the full photo + the enlarged table crop
+        //    B) Cloud Vision OCR reads the enlarged table crop
+        if (!ocrTask) {
+          ocrTask = tableTask.then((table) => {
+            const src = table ? table.crop : { base64: base64Image, mime: mimeType };
+            return this.runOcr(src.base64, src.mime).then((o) =>
+              o ? { lines: o.lines, part: table ? table.part : imagePart } : null
+            );
+          });
         }
-
-        // 2) Gemini structures the document. With OCR: grounded on the OCR text.
-        //    Without OCR (fallback): table zoom + independent readings + majority vote.
-        const mainCall = this.callGemini(
-          [{ text: this.buildPrompt() + (ocr ? this.buildOcrGrounding(ocr) : '') }, imagePart],
-          {
-            timeoutMs: TIMEOUT_MS,
-            highResImage: true,
-            thinkingLevel: CONFIG.GENERATION_CONFIG?.extractionThinkingLevel || 'MEDIUM',
-            schema: this.extractionSchema(),
-          }
-        );
-        const [main, nameReads] = await Promise.all([
-          mainCall,
-          ocr ? Promise.resolve(null) : this.zoomedNameReadings(base64Image, mimeType, imagePart, TIMEOUT_MS),
-        ]);
+        const table = await tableTask;
+        const parts = [{ text: this.buildPrompt() }, imagePart];
+        if (table) {
+          parts.push(
+            {
+              text: 'התמונה הבאה היא הגדלה של טבלת המוצרים מאותה חשבונית (שחור-לבן, ניגודיות מוגברת). קרא את שמות המוצרים ואת המספרים בשורות המוצרים מתוך ההגדלה; את שאר הפרטים (ספק, תאריך, מספר מסמך, סיכומים) מהתמונה המלאה.',
+            },
+            table.part
+          );
+        }
+        const mainCall = this.callGemini(parts, {
+          timeoutMs: TIMEOUT_MS,
+          highResImage: true,
+          thinkingLevel: CONFIG.GENERATION_CONFIG?.extractionThinkingLevel || 'LOW',
+          schema: this.extractionSchema(),
+          model: CONFIG.VISION_MODEL || null,
+        });
+        const [main, ocr] = await Promise.all([mainCall, ocrTask]);
         const { text, usage, finishReason } = main;
 
         console.log('✅ Gemini Response received', { usage, finishReason });
@@ -184,8 +206,13 @@ const GeminiService = {
 
         if (onProgress) onProgress({ status: 'processing', message: 'מאמת שמות מוצרים...' });
         if (ocr) {
-          this.groundNamesInOcr(parsed.products, ocr.lines);
+          // Word-by-word agreement Gemini ↔ OCR; disagreements → tie-break on the crop
+          this.compareNamesWithOcr(parsed.products, ocr.lines);
+          const disputed = parsed.products.filter((p) => !p.name_verified);
+          if (disputed.length > 0) await this.adjudicateNames(disputed, ocr.part);
         } else {
+          // No OCR available: zoom + independent Gemini readings + majority vote
+          const nameReads = await this.zoomedNameReadings(base64Image, mimeType, imagePart, TIMEOUT_MS);
           await this.resolveProductNames(parsed.products, nameReads.readings, nameReads.part);
         }
         parsed.ocr_used = !!ocr;
@@ -527,30 +554,37 @@ const GeminiService = {
     });
   },
 
-  /** Prompt section that grounds the extraction in the OCR text */
-  buildOcrGrounding(ocr) {
-    const text = String(ocr.text || '').slice(0, 8000);
-    return `
-
-## טקסט OCR של המסמך (זוהה ע"י מנוע OCR ייעודי — התווים בו מדויקים)
-<<<
-${text}
->>>
-- **שמות מוצרים ושם הספק: העתק את המילים מתוך טקסט ה-OCR בדיוק**, לא לפי מה שנראה לך בתמונה. התמונה משמשת רק להבנת המבנה (איזה מספר שייך לאיזו עמודה ושורה).
-- אם שם המוצר מופיע ב-OCR באותה שורה עם קוד פריט/ברקוד/מספרים — קח רק את מילות השם (כולל מידות/אחוזים שהם חלק מהשם).
-- גם מספרים (כמות, מחיר, הנחה, סכום, מע"מ) — העדף את הערכים שבטקסט ה-OCR.
-- אל "תתקן" מילים מה-OCR, גם אם הן נראות לך לא תקינות.`;
+  /**
+   * Locate the product table (Flash-Lite, minimal thinking), crop it with a margin,
+   * enlarge it and enhance contrast. The crop gives both readers (Gemini and the OCR
+   * engine) many more pixels per letter than the whole photo, where the receipt may
+   * fill only part of the frame.
+   * Returns { crop: {base64, mime}, part } or null (→ readers use the full photo).
+   */
+  async prepareTableCrop(base64Image, mimeType, imagePart) {
+    if (!(mimeType || '').startsWith('image/') || typeof document === 'undefined') return null;
+    try {
+      const box = await this.detectProductTable(imagePart);
+      if (!box) return null;
+      const crop = await this.cropToRows(base64Image, mimeType, box, { enhance: true });
+      if (!crop) return null;
+      console.log('🔎 Product table cropped and enlarged for reading');
+      return { crop, part: { inline_data: { mime_type: crop.mime, data: crop.base64 } } };
+    } catch (err) {
+      console.warn('⚠️ Table crop skipped:', err.message);
+      return null;
+    }
   },
 
   /**
-   * Verify (and, if needed, correct) every product name against the OCR text:
-   *  - find the OCR line that best contains the name's words;
-   *  - every word of the name must exist in that line (after normalizing quotes /
-   *    gershayim / final letters); a word that differs is replaced by the OCR word;
-   *  - a name whose words can't all be located in the OCR → name_verified = false.
-   * The resulting name consists only of words the OCR engine actually recognized.
+   * Compare each product name (Gemini) with the OCR of the table, word by word.
+   *  - Every word read identically by both (after normalizing quotes/gershayim/final
+   *    letters) → name_verified = true, name unchanged.
+   *  - Otherwise → name_verified = false and name_candidates = [Gemini's reading,
+   *    the OCR's reading]; the tie-break decides from the image (or nobody wins).
+   * Neither source overwrites the other on its own.
    */
-  groundNamesInOcr(products, ocrLines) {
+  compareNamesWithOcr(products, ocrLines) {
     const key = (w) =>
       this.normalizeProductName(w)
         .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
@@ -559,19 +593,19 @@ ${text}
     const lines = (ocrLines || []).map((l) =>
       l.split(/\s+/).filter(Boolean).map((raw) => ({ raw, k: key(raw) })).filter((t) => t.k)
     );
-    const allTokens = [].concat(...lines);
 
     // Best OCR token for a name word, within a token list
     const bestIn = (k, tokens) => {
       let best = null;
       let s = 0;
       tokens.forEach((t) => {
-        // 1–2 letter words must match exactly (no fuzzy guessing on tiny words)
+        // 1–2 letter words must match exactly (no fuzzy pairing of tiny words)
         const v = k.length <= 2 || t.k.length <= 2 ? (k === t.k ? 1 : 0) : sim(k, t.k);
         if (v > s) { s = v; best = t; }
       });
       return { token: best, sim: s };
     };
+    const isWord = (t) => t && /[א-תa-z]/i.test(t.raw) && !/^\d/.test(t.raw);
 
     products.forEach((p) => {
       const words = String(p.name || '').split(/\s+/).filter(Boolean);
@@ -597,54 +631,52 @@ ${text}
         return;
       }
 
-      // Pass 1: match each word by spelling similarity
-      const matched = keys.map((k) => {
+      // Pass 1: pair each word with its OCR word by spelling similarity
+      const paired = keys.map((k) => {
         if (!k) return { skip: true };
-        let m = bestIn(k, bestLine);
-        if (m.sim >= 0.5) return { token: m.token, idx: bestLine.indexOf(m.token) };
-        const g = bestIn(k, allTokens); // the word may have wrapped to another line
-        return g.sim >= 0.8 ? { token: g.token, idx: -1 } : null;
+        const m = bestIn(k, bestLine);
+        return m.sim >= 0.5 ? { token: m.token, idx: bestLine.indexOf(m.token) } : null;
       });
-
-      // Pass 2: alignment — an unmatched word next to a matched word takes the OCR word
-      // at the same position in the line (if it is a word, not a number/code)
-      const isWord = (t) => t && /[א-תa-z]/i.test(t.raw) && !/^\d/.test(t.raw);
-      const used = new Set(matched.filter((m) => m && m.token).map((m) => m.token));
-      matched.forEach((m, i) => {
+      // Pass 2: alignment — an unpaired word next to a paired one takes the OCR word at
+      // the same position (only real words, never numbers/codes)
+      const used = new Set(paired.filter((m) => m && m.token).map((m) => m.token));
+      paired.forEach((m, i) => {
         if (m !== null) return;
-        const prev = matched[i - 1];
-        const next = matched[i + 1];
+        const prev = paired[i - 1];
+        const next = paired[i + 1];
         let idx = -1;
         if (next && next.idx > 0) idx = next.idx - 1;
         else if (prev && prev.idx >= 0) idx = prev.idx + 1;
         const t = bestLine[idx];
-        if (isWord(t) && !used.has(t) && sim(keys[i], t.k) >= 0.25) {
-          matched[i] = { token: t, idx };
+        if (isWord(t) && !used.has(t)) {
+          paired[i] = { token: t, idx };
           used.add(t);
         }
       });
 
-      let allFound = true;
-      const fixed = words.map((w, i) => {
-        const m = matched[i];
-        if (m && m.skip) return w; // pure punctuation
+      let agree = true;
+      const ocrWords = words.map((w, i) => {
+        const m = paired[i];
+        if (m && m.skip) return w;
         if (!m || !m.token) {
-          allFound = false;
+          agree = false;
           return w;
         }
-        return m.token.k === keys[i] ? w : m.token.raw; // differs → take the OCR spelling
+        if (m.token.k !== keys[i]) agree = false;
+        return m.token.raw;
       });
+      const ocrName = ocrWords.join(' ');
 
-      const grounded = fixed.join(' ');
-      p.name_candidates = grounded !== p.name ? [grounded, p.name] : [p.name];
-      p.name_second_reading = grounded !== p.name ? p.name : bestLine.map((t) => t.raw).join(' ');
-      if (allFound) {
-        if (grounded !== p.name) console.log(`🔤 Name corrected by OCR: "${p.name}" → "${grounded}"`);
-        p.name = grounded;
+      p.name_ocr = ocrName;
+      if (agree) {
         p.name_verified = true;
+        p.name_candidates = [p.name];
+        p.name_second_reading = null;
       } else {
         p.name_verified = false;
-        console.warn(`⚠️ Name only partly found in OCR: "${p.name}" (OCR line: "${p.name_second_reading}")`);
+        p.name_candidates = ocrName !== p.name ? [p.name, ocrName] : [p.name];
+        p.name_second_reading = ocrName !== p.name ? ocrName : null;
+        console.log(`🔍 Gemini vs OCR disagree: "${p.name}" ≠ "${ocrName}"`);
       }
     });
   },
@@ -708,7 +740,7 @@ ${text}
       ],
       {
         timeoutMs: 30000,
-        thinkingLevel: 'LOW',
+        thinkingLevel: 'MINIMAL', // simple localization task — keep it fast and cheap
         schema: {
           type: 'object',
           properties: {
@@ -726,29 +758,36 @@ ${text}
   },
 
   /**
-   * Crop the rows of the box (with margin) across the full image width — robust to a
-   * slightly wrong horizontal box — and scale it up so the long side is ~2400px.
+   * Crop the table box (with a generous margin, so a slightly wrong box still contains
+   * the whole rows) and scale it up so the long side is ~2400px.
+   * enhance: grayscale + contrast stretch — standard OCR pre-processing that makes faded
+   * thermal print and shadows much more legible.
    */
-  cropToRows(base64Image, mimeType, box) {
+  cropToRows(base64Image, mimeType, box, { enhance = false } = {}) {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         try {
           const W = img.naturalWidth;
           const H = img.naturalHeight;
-          const [ymin, , ymax] = box;
-          const margin = (ymax - ymin) * 0.08 + 15;
-          const y0 = Math.max(0, Math.floor(((ymin - margin) / 1000) * H));
-          const y1 = Math.min(H, Math.ceil(((ymax + margin) / 1000) * H));
+          const [ymin, xmin, ymax, xmax] = box;
+          const yMargin = (ymax - ymin) * 0.08 + 15;
+          const xMargin = (xmax - xmin) * 0.06 + 20;
+          const y0 = Math.max(0, Math.floor(((ymin - yMargin) / 1000) * H));
+          const y1 = Math.min(H, Math.ceil(((ymax + yMargin) / 1000) * H));
+          const x0 = Math.max(0, Math.floor(((xmin - xMargin) / 1000) * W));
+          const x1 = Math.min(W, Math.ceil(((xmax + xMargin) / 1000) * W));
+          const cropW = x1 - x0;
           const cropH = y1 - y0;
-          if (cropH < 40) return resolve(null);
-          const scale = Math.min(3, 2400 / Math.max(W, cropH));
+          if (cropH < 40 || cropW < 80) return resolve(null);
+          const scale = Math.min(3, 2400 / Math.max(cropW, cropH));
           const canvas = document.createElement('canvas');
-          canvas.width = Math.round(W * scale);
+          canvas.width = Math.round(cropW * scale);
           canvas.height = Math.round(cropH * scale);
           const ctx = canvas.getContext('2d');
           ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(img, 0, y0, W, cropH, 0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, x0, y0, cropW, cropH, 0, 0, canvas.width, canvas.height);
+          if (enhance) this.enhanceForOcr(ctx, canvas.width, canvas.height);
           resolve({ base64: canvas.toDataURL('image/jpeg', 0.92).split(',')[1], mime: 'image/jpeg' });
         } catch (err) {
           console.warn('Crop failed:', err);
@@ -758,6 +797,32 @@ ${text}
       img.onerror = () => resolve(null);
       img.src = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
     });
+  },
+
+  /**
+   * Grayscale + contrast stretch (1st–99th percentile → 0–255). One pass over the crop
+   * only (not the full photo), so it stays fast on phones.
+   */
+  enhanceForOcr(ctx, w, h) {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4) {
+      const g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+      d[i] = g;
+      hist[g | 0]++;
+    }
+    const total = d.length / 4;
+    let lo = 0;
+    let hi = 255;
+    for (let acc = 0; lo < 255 && (acc += hist[lo]) < total * 0.01; lo++);
+    for (let acc = 0; hi > 0 && (acc += hist[hi]) < total * 0.01; hi--);
+    const range = Math.max(1, hi - lo);
+    for (let i = 0; i < d.length; i += 4) {
+      const v = Math.max(0, Math.min(255, ((d[i] - lo) * 255) / range));
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    ctx.putImageData(imgData, 0, 0);
   },
 
   /**
@@ -854,7 +919,8 @@ ${lines}`,
         {
           timeoutMs: 45000,
           highResImage: true,
-          thinkingLevel: 'MEDIUM',
+          thinkingLevel: 'LOW',
+          model: CONFIG.VISION_MODEL || null,
           schema: {
             type: 'object',
             properties: {
