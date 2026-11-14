@@ -128,6 +128,7 @@ const GeminiService = {
     const RETRY_DELAYS = [1000, 2500];
 
     let lastError = null;
+    let ocr; // undefined = not tried yet; null = unavailable; object = OCR result
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
@@ -145,19 +146,26 @@ const GeminiService = {
 
         const imagePart = { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } };
 
-        // In parallel:
-        //  A) main extraction on the full photo
-        //  B) locate the product table → crop it from the photo (zoom) → two independent
-        //     readings of the product names on the crop
-        // Names are then decided by majority vote (resolveProductNames).
-        const [main, nameReads] = await Promise.all([
-          this.callGemini([{ text: this.buildPrompt() }, imagePart], {
+        // 1) OCR (Cloud Vision) — exact characters. Done once, reused on retries.
+        if (ocr === undefined) {
+          if (onProgress) onProgress({ status: 'analyzing', message: 'מזהה טקסט (OCR)...' });
+          ocr = await this.runOcr(base64Image, mimeType);
+        }
+
+        // 2) Gemini structures the document. With OCR: grounded on the OCR text.
+        //    Without OCR (fallback): table zoom + independent readings + majority vote.
+        const mainCall = this.callGemini(
+          [{ text: this.buildPrompt() + (ocr ? this.buildOcrGrounding(ocr) : '') }, imagePart],
+          {
             timeoutMs: TIMEOUT_MS,
             highResImage: true,
             thinkingLevel: CONFIG.GENERATION_CONFIG?.extractionThinkingLevel || 'MEDIUM',
             schema: this.extractionSchema(),
-          }),
-          this.zoomedNameReadings(base64Image, mimeType, imagePart, TIMEOUT_MS),
+          }
+        );
+        const [main, nameReads] = await Promise.all([
+          mainCall,
+          ocr ? Promise.resolve(null) : this.zoomedNameReadings(base64Image, mimeType, imagePart, TIMEOUT_MS),
         ]);
         const { text, usage, finishReason } = main;
 
@@ -175,7 +183,12 @@ const GeminiService = {
         parsed.products = this.cleanProducts(parsed.products || []);
 
         if (onProgress) onProgress({ status: 'processing', message: 'מאמת שמות מוצרים...' });
-        await this.resolveProductNames(parsed.products, nameReads.readings, nameReads.part);
+        if (ocr) {
+          this.groundNamesInOcr(parsed.products, ocr.lines);
+        } else {
+          await this.resolveProductNames(parsed.products, nameReads.readings, nameReads.part);
+        }
+        parsed.ocr_used = !!ocr;
 
         const validated = this.validateResponse(parsed);
         validated.readability = this.assessReadability(validated);
@@ -457,7 +470,187 @@ const GeminiService = {
   },
 
   // ==========================================================================
-  // PRODUCT-NAME RELIABILITY: zoom → 3 independent readings → majority vote →
+  // OCR-GROUNDED EXTRACTION (primary path)
+  // A dedicated OCR engine recognizes characters; Gemini only structures the text;
+  // code verifies every word of every product name against the OCR output.
+  // ==========================================================================
+
+  /**
+   * Run Cloud Vision OCR through our server endpoint (/api/ocr).
+   * Returns { text, lines, confidence } or null if OCR is unavailable (→ fallback path).
+   */
+  async runOcr(base64Image, mimeType) {
+    if (!(mimeType || '').startsWith('image/')) return null; // PDFs: fallback path
+    try {
+      let image = base64Image;
+      // Stay well under the serverless request-size limit
+      if (image.length > 3000000 && typeof document !== 'undefined') {
+        const smaller = await this.resizeImage(base64Image, mimeType, 2560, 0.85);
+        if (smaller) image = smaller.base64;
+      }
+      const resp = await fetch(CONFIG.OCR_ENDPOINT || '/api/ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_base64: image }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        console.warn('⚠️ OCR unavailable — using fallback reading:', data.error || resp.status);
+        return null;
+      }
+      if (!data.lines || data.lines.length === 0) return null;
+      console.log(`🔤 OCR: ${data.lines.length} lines (confidence ${data.confidence?.toFixed?.(2) ?? '—'})`);
+      return data;
+    } catch (err) {
+      console.warn('⚠️ OCR failed — using fallback reading:', err.message);
+      return null;
+    }
+  },
+
+  resizeImage(base64Image, mimeType, maxSide, quality) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const r = Math.min(maxSide / img.naturalWidth, maxSide / img.naturalHeight, 1);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.naturalWidth * r);
+          canvas.height = Math.round(img.naturalHeight * r);
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve({ base64: canvas.toDataURL('image/jpeg', quality).split(',')[1], mime: 'image/jpeg' });
+        } catch (_) {
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
+    });
+  },
+
+  /** Prompt section that grounds the extraction in the OCR text */
+  buildOcrGrounding(ocr) {
+    const text = String(ocr.text || '').slice(0, 8000);
+    return `
+
+## טקסט OCR של המסמך (זוהה ע"י מנוע OCR ייעודי — התווים בו מדויקים)
+<<<
+${text}
+>>>
+- **שמות מוצרים ושם הספק: העתק את המילים מתוך טקסט ה-OCR בדיוק**, לא לפי מה שנראה לך בתמונה. התמונה משמשת רק להבנת המבנה (איזה מספר שייך לאיזו עמודה ושורה).
+- אם שם המוצר מופיע ב-OCR באותה שורה עם קוד פריט/ברקוד/מספרים — קח רק את מילות השם (כולל מידות/אחוזים שהם חלק מהשם).
+- גם מספרים (כמות, מחיר, הנחה, סכום, מע"מ) — העדף את הערכים שבטקסט ה-OCR.
+- אל "תתקן" מילים מה-OCR, גם אם הן נראות לך לא תקינות.`;
+  },
+
+  /**
+   * Verify (and, if needed, correct) every product name against the OCR text:
+   *  - find the OCR line that best contains the name's words;
+   *  - every word of the name must exist in that line (after normalizing quotes /
+   *    gershayim / final letters); a word that differs is replaced by the OCR word;
+   *  - a name whose words can't all be located in the OCR → name_verified = false.
+   * The resulting name consists only of words the OCR engine actually recognized.
+   */
+  groundNamesInOcr(products, ocrLines) {
+    const key = (w) =>
+      this.normalizeProductName(w)
+        .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
+        .replace(/\s+/g, '');
+    const sim = (a, b) => (a === b ? 1 : SupplierMatcher.calculateSimilarity(a, b));
+    const lines = (ocrLines || []).map((l) =>
+      l.split(/\s+/).filter(Boolean).map((raw) => ({ raw, k: key(raw) })).filter((t) => t.k)
+    );
+    const allTokens = [].concat(...lines);
+
+    // Best OCR token for a name word, within a token list
+    const bestIn = (k, tokens) => {
+      let best = null;
+      let s = 0;
+      tokens.forEach((t) => {
+        // 1–2 letter words must match exactly (no fuzzy guessing on tiny words)
+        const v = k.length <= 2 || t.k.length <= 2 ? (k === t.k ? 1 : 0) : sim(k, t.k);
+        if (v > s) { s = v; best = t; }
+      });
+      return { token: best, sim: s };
+    };
+
+    products.forEach((p) => {
+      const words = String(p.name || '').split(/\s+/).filter(Boolean);
+      const keys = words.map(key);
+
+      // OCR line that contains most of the name
+      let bestLine = null;
+      let bestScore = 0;
+      lines.forEach((line) => {
+        const score = keys.reduce((acc, k) => {
+          if (!k) return acc + 1;
+          const m = bestIn(k, line);
+          return acc + (m.sim >= 0.5 ? m.sim : 0);
+        }, 0) / Math.max(1, keys.length);
+        if (score > bestScore) { bestScore = score; bestLine = line; }
+      });
+
+      if (!bestLine || bestScore < 0.5) {
+        p.name_verified = false;
+        p.name_candidates = [p.name];
+        p.name_second_reading = null;
+        console.warn(`⚠️ Name not found in OCR: "${p.name}"`);
+        return;
+      }
+
+      // Pass 1: match each word by spelling similarity
+      const matched = keys.map((k) => {
+        if (!k) return { skip: true };
+        let m = bestIn(k, bestLine);
+        if (m.sim >= 0.5) return { token: m.token, idx: bestLine.indexOf(m.token) };
+        const g = bestIn(k, allTokens); // the word may have wrapped to another line
+        return g.sim >= 0.8 ? { token: g.token, idx: -1 } : null;
+      });
+
+      // Pass 2: alignment — an unmatched word next to a matched word takes the OCR word
+      // at the same position in the line (if it is a word, not a number/code)
+      const isWord = (t) => t && /[א-תa-z]/i.test(t.raw) && !/^\d/.test(t.raw);
+      const used = new Set(matched.filter((m) => m && m.token).map((m) => m.token));
+      matched.forEach((m, i) => {
+        if (m !== null) return;
+        const prev = matched[i - 1];
+        const next = matched[i + 1];
+        let idx = -1;
+        if (next && next.idx > 0) idx = next.idx - 1;
+        else if (prev && prev.idx >= 0) idx = prev.idx + 1;
+        const t = bestLine[idx];
+        if (isWord(t) && !used.has(t) && sim(keys[i], t.k) >= 0.25) {
+          matched[i] = { token: t, idx };
+          used.add(t);
+        }
+      });
+
+      let allFound = true;
+      const fixed = words.map((w, i) => {
+        const m = matched[i];
+        if (m && m.skip) return w; // pure punctuation
+        if (!m || !m.token) {
+          allFound = false;
+          return w;
+        }
+        return m.token.k === keys[i] ? w : m.token.raw; // differs → take the OCR spelling
+      });
+
+      const grounded = fixed.join(' ');
+      p.name_candidates = grounded !== p.name ? [grounded, p.name] : [p.name];
+      p.name_second_reading = grounded !== p.name ? p.name : bestLine.map((t) => t.raw).join(' ');
+      if (allFound) {
+        if (grounded !== p.name) console.log(`🔤 Name corrected by OCR: "${p.name}" → "${grounded}"`);
+        p.name = grounded;
+        p.name_verified = true;
+      } else {
+        p.name_verified = false;
+        console.warn(`⚠️ Name only partly found in OCR: "${p.name}" (OCR line: "${p.name_second_reading}")`);
+      }
+    });
+  },
+
+  // ==========================================================================
+  // FALLBACK (no OCR): zoom → 3 independent readings → majority vote →
   // image-grounded tie-break between the readings (never a new, invented name)
   // ==========================================================================
 

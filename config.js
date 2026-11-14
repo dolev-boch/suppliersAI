@@ -34,6 +34,9 @@ const CONFIG = {
     PRODUCTS_SUM_TOLERANCE_ABS: 3,
   },
 
+  // Server-side OCR (Google Cloud Vision) — see api/ocr.js
+  OCR_ENDPOINT: '/api/ocr',
+
   RESCAN_MESSAGE: 'הצילום לא מספיק ברור, נא לצלם בשנית את החשבונית עם הפרטים',
 
   // Google Sheets Configuration
