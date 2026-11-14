@@ -557,6 +557,10 @@ function findProduct(existingProducts, productName, catalogName) {
  */
 function normalizeProductName(name) {
   return String(name || '')
+    .normalize('NFKC')
+    .replace(/[​-‏‪-‮⁦-⁩﻿­]/g, '')
+    .replace(/ /g, ' ')
+    .replace(/%(\d+(?:\.\d+)?)/g, '$1%')
     .toLowerCase()
     .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
     .replace(/["'`´״׳‘’‚‛“”„‟]/g, '')

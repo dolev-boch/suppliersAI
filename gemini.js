@@ -249,11 +249,18 @@ const GeminiService = {
    */
   normalizeProductName(name) {
     return String(name || '')
+      // Unicode normalization: presentation forms / full-width signs → standard characters
+      .normalize('NFKC')
+      // invisible direction marks & zero-width characters (common in OCR of RTL text)
+      .replace(/[​-‏‪-‮⁦-⁩﻿­]/g, '')
+      .replace(/ /g, ' ')
       .toLowerCase()
       .trim()
       // every apostrophe / quote / geresh / gershayim variant (ק"ג = ק'ג = ק״ג = ק’ג)
       .replace(/["'`´״׳‘’‚‛“”„‟]/g, '')
       .replace(/[.,]/g, '')
+      // "%42" (RTL order) ≡ "42%"
+      .replace(/%(\d+)/g, '$1%')
       .replace(/\s+/g, ' ');
   },
 
@@ -590,8 +597,10 @@ const GeminiService = {
         .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
         .replace(/\s+/g, '');
     const sim = (a, b) => (a === b ? 1 : SupplierMatcher.calculateSimilarity(a, b));
+    // Split on any whitespace incl. non-breaking spaces; drop invisible direction marks
+    const clean = (l) => String(l).normalize('NFKC').replace(/[​-‏‪-‮⁦-⁩﻿­]/g, '');
     const lines = (ocrLines || []).map((l) =>
-      l.split(/\s+/).filter(Boolean).map((raw) => ({ raw, k: key(raw) })).filter((t) => t.k)
+      clean(l).split(/[\s ]+/).filter(Boolean).map((raw) => ({ raw, k: key(raw) })).filter((t) => t.k)
     );
 
     // Best OCR token for a name word, within a token list
