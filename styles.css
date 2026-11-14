@@ -1033,3 +1033,17 @@ button {
   opacity: 0.5;
   pointer-events: none;
 }
+
+/* Rescan prompt (unclear invoice photo) */
+.rescan-reasons {
+  margin: 8px 0 12px;
+  padding-inline-start: 20px;
+  font-size: 0.9em;
+  text-align: right;
+}
+.rescan-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}

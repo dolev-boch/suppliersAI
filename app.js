@@ -287,18 +287,35 @@ class InvoiceScanner {
       this.loadingStartTime = Date.now();
       this.startLoadingProgress();
 
+      const loadingText = this.elements.loadingState.querySelector('p');
+
       // Analyze with Gemini - with progress callback
-      const result = await GeminiService.analyzeInvoice(this.imageBase64, (progress) => {
-        // Update loading text with progress status
-        const loadingText = this.elements.loadingState.querySelector('p');
-        if (loadingText) {
-          loadingText.textContent = progress.message || 'מנתח חשבונית...';
-        }
-      });
+      const result = await GeminiService.analyzeInvoice(
+        this.imageBase64,
+        (progress) => {
+          if (loadingText) loadingText.textContent = progress.message || 'מנתח חשבונית...';
+        },
+        this.selectedFile?.type || 'image/jpeg'
+      );
       this.currentResult = result;
       this.editedData = {}; // Reset edited data
 
       console.log('Analysis result:', result);
+
+      if (result.usage) {
+        this.updateUsageStatistics(result.usage);
+      }
+
+      // Readability gate — never save a guessed invoice
+      if (!result.readability.ok) {
+        this.stopLoadingProgress();
+        this.showRescanPrompt(result.readability.reasons);
+        return;
+      }
+
+      // Map product names to this supplier's existing catalog
+      if (loadingText) loadingText.textContent = 'מתאים מוצרים לקטלוג הספק...';
+      await GeminiService.matchProductsToCatalog(result);
 
       // Stop progress updates
       this.stopLoadingProgress();
@@ -306,24 +323,10 @@ class InvoiceScanner {
       // Play completion sound
       this.completionSound();
 
-      // Check average confidence
-      const avgConfidence = GeminiService.calculateAverageConfidence(result);
-
-      if (avgConfidence < CONFIG.CONFIDENCE_THRESHOLDS.LOW) {
-        this.showStatus('איכות התמונה אינה מספקת. נא לצלם שוב בתאורה טובה יותר', 'warning');
-      } else if (avgConfidence < CONFIG.CONFIDENCE_THRESHOLDS.MEDIUM) {
-        this.showStatus('החשבונית נותחה. חלק מהנתונים עשויים להיות לא מדויקים', 'info');
-      } else {
-        this.showStatus('החשבונית נותחה בהצלחה!', 'success');
-      }
+      this.showStatus('החשבונית נותחה בהצלחה!', 'success');
 
       // Display results
       this.displayResults(result);
-
-      // Update usage statistics
-      if (result.usage) {
-        this.updateUsageStatistics(result.usage);
-      }
     } catch (error) {
       console.error('Processing error:', error);
       this.stopLoadingProgress();
@@ -332,6 +335,59 @@ class InvoiceScanner {
       this.elements.processBtn.disabled = false;
       this.elements.loadingState.style.display = 'none';
     }
+  }
+
+  /**
+   * Scan was not clear enough: ask the user to photograph again.
+   * Offers a manual fallback that saves only the invoice summary (no product prices),
+   * so a genuinely damaged invoice can still be recorded after manual review.
+   */
+  showRescanPrompt(reasons = []) {
+    this.elements.resultsSection.style.display = 'none';
+    const reasonsHtml = reasons.length
+      ? `<ul class="rescan-reasons">${reasons.map((r) => `<li>${this.escapeHtml(r)}</li>`).join('')}</ul>`
+      : '';
+    this.showStatus(
+      `<div><strong>${CONFIG.RESCAN_MESSAGE}</strong></div>
+       ${reasonsHtml}
+       <div class="rescan-actions">
+         <button type="button" class="primary-btn" id="rescanBtn">צלם שוב</button>
+         <button type="button" class="secondary-btn" id="manualContinueBtn">המשך ידנית (ללא מעקב מחירי מוצרים)</button>
+       </div>`,
+      'warning',
+      true
+    );
+    // The status element lives inside the hidden results section — move it into view
+    this.elements.resultsSection.parentNode.insertBefore(
+      this.elements.statusMessage,
+      this.elements.resultsSection
+    );
+
+    document.getElementById('rescanBtn')?.addEventListener('click', () => {
+      this.restoreStatusPosition();
+      this.resetForNewScan();
+      this.elements.fileInput.click();
+    });
+    document.getElementById('manualContinueBtn')?.addEventListener('click', () => {
+      this.restoreStatusPosition();
+      // Products are not trusted → never sent to price tracking
+      this.currentResult.products = [];
+      this.currentResult.productsDisabled = true;
+      this.displayResults(this.currentResult);
+      this.enterEditMode();
+      this.showStatus('בדוק ותקן את הפרטים ידנית לפני השליחה. מחירי המוצרים לא יעודכנו.', 'info');
+    });
+  }
+
+  restoreStatusPosition() {
+    const actions = this.elements.newScanBtn;
+    if (actions && this.elements.statusMessage.previousElementSibling !== actions) {
+      actions.parentNode.insertBefore(this.elements.statusMessage, actions.nextSibling);
+    }
+  }
+
+  escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   /**
@@ -349,9 +405,9 @@ class InvoiceScanner {
     }
 
     // Calculate estimated time based on model
-    const modelName = CONFIG.GEMINI_MODEL || 'gemini-2.5-flash';
+    const modelName = CONFIG.GEMINI_MODEL || '';
     const isFlashLite = modelName.includes('lite');
-    const estimatedTime = isFlashLite ? 15 : 30; // Flash Lite: ~15s, Flash: ~30s
+    const estimatedTime = isFlashLite ? 20 : 35;
 
     // Show initial message with time estimate
     this.elements.loadingProgress.textContent = `זמן משוער: ${estimatedTime} שניות`;
@@ -900,6 +956,7 @@ class InvoiceScanner {
     this.currentResult = null;
     this.editedData = {};
     this.editMode = false;
+    this.restoreStatusPosition();
 
     // Reset UI
     this.elements.uploadZone.style.display = 'block';
@@ -972,8 +1029,13 @@ class InvoiceScanner {
         // Read file as base64
         const base64Image = await this.readFileAsBase64(file);
 
-        // Analyze with Gemini
-        const result = await GeminiService.analyzeInvoice(base64Image);
+        // Analyze with Gemini (pass the real MIME type — PDFs must not be sent as JPEG)
+        const result = await GeminiService.analyzeInvoice(base64Image, null, file.type || 'image/jpeg');
+
+        // Never save a guessed invoice
+        if (!result.readability.ok) {
+          throw new Error(`${CONFIG.RESCAN_MESSAGE} (${result.readability.reasons.join(', ')})`);
+        }
 
         // Send to Google Sheets immediately
         await this.sendBulkDataToSheets(result);
@@ -1081,9 +1143,14 @@ class InvoiceScanner {
    * Send products data to products tracking sheet
    * @param {Object} result - Invoice result with products array
    */
-  async sendProductsToSheet(result) {
+  async sendProductsToSheet(result, supplierName = result.supplier_name, documentDate = result.document_date) {
     if (!CONFIG.SHEETS_CONFIG.productsScriptUrl) {
       console.warn('⚠️ Products script URL not configured - skipping product tracking');
+      return;
+    }
+
+    if (result.productsDisabled || !result.readability?.ok) {
+      console.log('ℹ️ Product tracking skipped (scan not reliable)');
       return;
     }
 
@@ -1127,10 +1194,25 @@ class InvoiceScanner {
       );
     }
 
+    // If the user changed the supplier, the catalog match (done for the AI's supplier) is void
+    const supplierChanged = supplierName !== result.supplier_name;
+
     const productsData = {
-      supplier_name: result.supplier_name,
-      document_date: result.document_date,
-      products: validProducts, // Only send products with valid prices > 0
+      supplier_name: supplierChanged ? supplierName : result.products_sheet_name || supplierName,
+      document_date: documentDate,
+      document_number: result.document_number || '',
+      products: validProducts.map((p) => ({
+        name: p.name,
+        catalog_name: supplierChanged ? null : p.catalog_name || null,
+        quantity: p.quantity,
+        unit: p.unit,
+        unit_price_before_vat: p.unit_price_before_vat,
+        total_before_vat: p.total_before_vat,
+        discount_applied: !!p.discount_applied,
+        discount_percent: p.discount_percent ?? null,
+        discount_amount: p.discount_amount ?? null,
+        price_before_discount: p.price_before_discount ?? null,
+      })),
     };
 
     console.log(`📦 Sending ${validProducts.length} products to tracking sheet:`, productsData);
@@ -1197,7 +1279,7 @@ class InvoiceScanner {
   /**
    * Upload invoice image to Google Drive
    */
-  async uploadImageToDrive(result) {
+  async uploadImageToDrive(result, supplierName = result.supplier_name, documentDate = result.document_date) {
     if (!CONFIG.SHEETS_CONFIG.driveUploadScriptUrl) {
       return; // Not configured yet
     }
@@ -1219,9 +1301,9 @@ class InvoiceScanner {
         image_base64:    processed.data,
         mime_type:       processed.mime,
         file_ext:        processed.ext,
-        supplier_name:   result.supplier_name  || 'לא ידוע',
+        supplier_name:   supplierName || 'לא ידוע',
         document_type:   result.document_type,
-        document_date:   result.document_date,
+        document_date:   documentDate,
         date_confidence: result.date_confidence || 0,
       };
 
@@ -1376,13 +1458,16 @@ class InvoiceScanner {
       // Phase 1: sheets in parallel (~2-3s)
       const sheetsPromises = [this.sendToSheetsWithRetry(dataToSend)];
       if (this.currentResult.products && this.currentResult.products.length > 0) {
-        sheetsPromises.push(this.sendProductsToSheet(this.currentResult));
+        sheetsPromises.push(
+          this.sendProductsToSheet(this.currentResult, dataToSend.supplier_name, dataToSend.document_date)
+        );
       }
       await Promise.all(sheetsPromises);
 
       // Phase 2: Drive upload — fire and forget, user doesn't wait
       this.showStatus(phaseHTML('done', 'active'), 'info', true);
-      this.uploadImageToDrive(this.currentResult); // intentionally not awaited
+      // intentionally not awaited
+      this.uploadImageToDrive(this.currentResult, dataToSend.supplier_name, dataToSend.document_date);
 
       this.showStatus(
         `<div>נשלח בהצלחה!</div>

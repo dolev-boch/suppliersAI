@@ -25,6 +25,7 @@ const SUPPLIERS = {
     'מר קייק',
     'מרכז הירק',
     'משתלות',
+    'עמרוסי ניסים ויורם',
     'נטפים',
     'פוליבה',
     'פיין וויין גבינות',
@@ -164,16 +165,80 @@ const SUPPLIERS = {
 // Helper functions for supplier matching
 const SupplierMatcher = {
   /**
-   * Normalize text for comparison
+   * Normalize text for comparison.
+   * Removes company suffixes, punctuation and Hebrew final-letter differences so
+   * that "עמרוסי נסים ויורם בע״מ" and "עמרוסי ניסים ויורם" compare as near-equal.
    */
   normalize(text) {
     if (!text) return '';
-    return text
+    return String(text)
       .toLowerCase()
-      .replace(/[\"'\(\)]/g, '')
-      .replace(/בע\"מ|בע"מ|בעמ|בע מ/g, '')
+      .replace(/בע["״׳'\s]*מ/g, ' ')
+      .replace(/\b(ltd|inc|co)\b\.?/g, ' ')
+      .replace(/[ך]/g, 'כ')
+      .replace(/[ם]/g, 'מ')
+      .replace(/[ן]/g, 'נ')
+      .replace(/[ף]/g, 'פ')
+      .replace(/[ץ]/g, 'צ')
+      .replace(/["'״׳`\(\)\[\]\.,\-_/\\:;!?]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  },
+
+  /**
+   * Similarity score (0..1) between two supplier names, tolerant to typos,
+   * missing words ("עמרוסי ניסים" vs "עמרוסי ניסים ויורם") and word order.
+   */
+  nameScore(a, b) {
+    const na = this.normalize(a);
+    const nb = this.normalize(b);
+    if (!na || !nb) return 0;
+    if (na === nb) return 1;
+
+    // Spaces removed (e.g. "מר קייק" vs "מרקייק")
+    if (na.replace(/ /g, '') === nb.replace(/ /g, '')) return 0.98;
+
+    const whole = this.calculateSimilarity(na, nb);
+
+    // Token coverage: every word of the shorter name appears (fuzzily) in the longer one
+    const ta = na.split(' ').filter(Boolean);
+    const tb = nb.split(' ').filter(Boolean);
+    const [shortT, longT] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+    let matchedChars = 0;
+    let allMatched = true;
+    for (const t of shortT) {
+      let best = 0;
+      for (const u of longT) {
+        const s = t === u ? 1 : Math.min(t.length, u.length) >= 4 ? this.calculateSimilarity(t, u) : 0;
+        if (s > best) best = s;
+      }
+      if (best >= 0.8) matchedChars += t.length;
+      else allMatched = false;
+    }
+    const shortLen = shortT.join('').length;
+    let tokenScore = 0;
+    // Short words (<4 letters) must match exactly as whole words, so "צח" only matches
+    // the word "צח", never a substring of another word.
+    if (allMatched && shortLen >= 2) {
+      const longLen = longT.join('').length;
+      // 0.86..0.95 depending on how much of the longer name is covered
+      tokenScore = 0.86 + 0.09 * (shortLen / longLen);
+    }
+
+    return Math.max(whole, tokenScore);
+  },
+
+  /**
+   * Find the best-matching name from a list of candidates.
+   * @returns {{name: string, score: number} | null}
+   */
+  bestMatch(text, candidates, threshold = 0.82) {
+    let best = null;
+    for (const c of candidates) {
+      const score = this.nameScore(text, c);
+      if (!best || score > best.score) best = { name: c, score };
+    }
+    return best && best.score >= threshold ? best : null;
   },
 
   /**
@@ -181,6 +246,7 @@ const SupplierMatcher = {
    */
   findPriorityMatch(text) {
     const normalized = this.normalize(text);
+    if (!normalized) return { matched: false };
 
     // 1. Check transliteration aliases first (for English spellings)
     for (const [englishName, hebrewName] of Object.entries(SUPPLIERS.transliterations)) {
@@ -194,42 +260,15 @@ const SupplierMatcher = {
       }
     }
 
-    // 2. Exact match (Hebrew)
-    for (const supplier of SUPPLIERS.priority) {
-      if (this.normalize(supplier) === normalized) {
-        return {
-          matched: true,
-          supplier: supplier,
-          confidence: 95,
-          matchType: 'exact',
-        };
-      }
-    }
-
-    // 3. Partial match (supplier name contained in text)
-    for (const supplier of SUPPLIERS.priority) {
-      const normalizedSupplier = this.normalize(supplier);
-      if (normalized.includes(normalizedSupplier) || normalizedSupplier.includes(normalized)) {
-        return {
-          matched: true,
-          supplier: supplier,
-          confidence: 90,
-          matchType: 'partial',
-        };
-      }
-    }
-
-    // 4. Fuzzy match (high threshold for typos)
-    for (const supplier of SUPPLIERS.priority) {
-      const similarity = this.calculateSimilarity(normalized, this.normalize(supplier));
-      if (similarity > 0.85) {
-        return {
-          matched: true,
-          supplier: supplier,
-          confidence: Math.round(similarity * 100),
-          matchType: 'fuzzy',
-        };
-      }
+    // 2. Best fuzzy/word match over the whole list (best match wins, not first match)
+    const best = this.bestMatch(text, SUPPLIERS.priority, 0.82);
+    if (best) {
+      return {
+        matched: true,
+        supplier: best.name,
+        confidence: Math.round(Math.max(best.score, 0.85) * 100),
+        matchType: best.score === 1 ? 'exact' : 'fuzzy',
+      };
     }
 
     return { matched: false };

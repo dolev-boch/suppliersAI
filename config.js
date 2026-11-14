@@ -5,25 +5,32 @@ const CONFIG = {
   // ✅ Gemini API Configuration - UPDATED FOR 2026
   GEMINI_API_URL: 'https://generativelanguage.googleapis.com/v1beta/models',
 
-  // ✅ UPDATED: Use Gemini 2.5 Flash (best balance for product tracking)
-  // Options as of January 2026:
-  // - 'gemini-2.5-flash' (recommended - best price/performance) ← CURRENT
-  // - 'gemini-2.5-flash-lite' (cheaper, faster, less capable)
-  // - 'gemini-2.5-pro' (most capable, slower, more expensive)
-  // - 'gemini-3-flash-preview' (experimental, latest features)
-  GEMINI_MODEL: 'gemini-2.5-flash',
+  // Gemini 3.5 Flash-Lite (stable). Replaces gemini-2.5-flash / 2.5-flash-lite.
+  GEMINI_MODEL: 'gemini-3.5-flash-lite',
 
   GEMINI_API_KEY: '', // Will be loaded from /api/config endpoint
 
-  // ✅ Generation Configuration - Optimized for invoice scanning
+  // Generation configuration for Gemini 3.x.
+  // Google recommends NOT overriding temperature/topK/topP on 3.x models, and using
+  // thinkingLevel instead of the old thinkingBudget. A little thinking ('low') makes
+  // the model actually do the discount / VAT arithmetic instead of guessing.
   GENERATION_CONFIG: {
-    temperature: 0.1, // Low for consistent, factual extraction
-    topK: 32,
-    topP: 0.95,
-    maxOutputTokens: 8192, // ✅ Maximum: needed for invoices with many products
-    // Gemini 2.5 Flash supports up to 8192 output tokens
-    // Don't reduce this - causes JSON truncation on large invoices
+    thinkingLevel: 'low', // minimal | low | medium | high
+    maxOutputTokens: 32768, // thinking tokens count toward this limit
   },
+
+  // Readability gate: below these values the scan is rejected and the user is asked
+  // to photograph the invoice again (no guessing).
+  READABILITY: {
+    MIN_SUPPLIER_CONFIDENCE: 75,
+    MIN_TOTAL_CONFIDENCE: 75,
+    MIN_PRODUCT_CONFIDENCE: 70,
+    // Sum of product lines must match the invoice subtotal within this tolerance
+    PRODUCTS_SUM_TOLERANCE_PCT: 4,
+    PRODUCTS_SUM_TOLERANCE_ABS: 3,
+  },
+
+  RESCAN_MESSAGE: 'הצילום לא מספיק ברור, נא לצלם בשנית את החשבונית עם הפרטים',
 
   // Google Sheets Configuration
   SHEETS_CONFIG: {
@@ -61,7 +68,7 @@ const CONFIG = {
     LOW: 60,
   },
 
-  // Rate Limiting (Gemini 2.5 Flash free tier)
+  // Rate Limiting (free tier)
   RATE_LIMITS: {
     requestsPerMinute: 15, // Free tier limit
     requestsPerDay: 1500, // Free tier limit

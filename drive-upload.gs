@@ -46,7 +46,7 @@ function doPost(e) {
     // Folder structure: root → year → supplier → month (no day subfolder)
     const root           = DriveApp.getFolderById(DRIVE_ROOT_FOLDER_ID);
     const yearFolder     = getOrCreate(root, currentYear);
-    const supplierFolder = getOrCreate(yearFolder, supplier);
+    const supplierFolder = getOrCreateSupplierFolder(root, yearFolder, supplier);
     const targetFolder   = getOrCreate(supplierFolder, monthFolderName(monthNum));
 
     // File name — append date (DD.MM.YY) when confidence ≥ 95%
@@ -79,6 +79,48 @@ function doPost(e) {
   }
 }
 
+/**
+ * Find the supplier folder that this name most probably belongs to, instead of
+ * creating a new folder for every mis-read / typo of the same supplier.
+ *  1. Near match among this year's supplier folders → use it.
+ *  2. Near match among previous years' supplier folders → create this year's
+ *     folder with that canonical spelling.
+ *  3. Otherwise create a new folder with the given name.
+ */
+function getOrCreateSupplierFolder(root, yearFolder, supplier) {
+  const thisYear = listSubfolderNames(yearFolder);
+  const exact = yearFolder.getFoldersByName(supplier);
+  if (exact.hasNext()) return exact.next();
+
+  let match = findBestSupplierMatch_(supplier, thisYear, 0.82);
+  if (match) {
+    Logger.log('🔗 Folder "' + supplier + '" → existing "' + match.name + '" (' + match.score.toFixed(2) + ')');
+    return yearFolder.getFoldersByName(match.name).next();
+  }
+
+  const otherYears = [];
+  const years = root.getFolders();
+  while (years.hasNext()) {
+    const y = years.next();
+    if (y.getId() === yearFolder.getId()) continue;
+    listSubfolderNames(y).forEach(function (n) { otherYears.push(n); });
+  }
+  match = findBestSupplierMatch_(supplier, otherYears, 0.82);
+  if (match) {
+    Logger.log('🔗 Folder "' + supplier + '" → canonical name from earlier year "' + match.name + '"');
+    return yearFolder.createFolder(match.name);
+  }
+
+  return yearFolder.createFolder(supplier);
+}
+
+function listSubfolderNames(folder) {
+  const names = [];
+  const it = folder.getFolders();
+  while (it.hasNext()) names.push(it.next().getName());
+  return names;
+}
+
 function getOrCreate(parentFolder, name) {
   const iter = parentFolder.getFoldersByName(name);
   return iter.hasNext() ? iter.next() : parentFolder.createFolder(name);
@@ -104,4 +146,89 @@ function testUpload() {
     })}};
     Logger.log('Test [' + c.label + ']: ' + doPost(ev).getContent());
   });
+}
+
+// ============================================================================
+// SUPPLIER NAME MATCHING (shared logic — same copy in main-invoice-script.gs,
+// drive-upload.gs and products-tracking2.gs; keep them in sync)
+// ============================================================================
+
+/** Normalize a supplier name: no בע"מ/ltd, no punctuation, no final-letter differences */
+function normalizeSupplierName_(text) {
+  if (!text) return '';
+  return String(text)
+    .toLowerCase()
+    .replace(/בע["״׳'\s]*מ/g, ' ')
+    .replace(/\b(ltd|inc|co)\b\.?/g, ' ')
+    .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
+    .replace(/["'״׳`\(\)\[\]\.,\-_\/\:;!?]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function levenshtein_(a, b) {
+  const m = [];
+  for (let i = 0; i <= b.length; i++) m[i] = [i];
+  for (let j = 0; j <= a.length; j++) m[0][j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      m[i][j] = b.charAt(i - 1) === a.charAt(j - 1)
+        ? m[i - 1][j - 1]
+        : Math.min(m[i - 1][j - 1] + 1, m[i][j - 1] + 1, m[i - 1][j] + 1);
+    }
+  }
+  return m[b.length][a.length];
+}
+
+function stringSimilarity_(a, b) {
+  const longer = a.length >= b.length ? a : b;
+  const shorter = a.length >= b.length ? b : a;
+  if (longer.length === 0) return 1;
+  return (longer.length - levenshtein_(longer, shorter)) / longer.length;
+}
+
+/**
+ * 0..1 similarity between two supplier names. Tolerates typos, a missing/extra
+ * word ("עמרוסי ניסים" vs "עמרוסי ניסים ויורם") and different word order.
+ */
+function supplierNameScore_(a, b) {
+  const na = normalizeSupplierName_(a);
+  const nb = normalizeSupplierName_(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  if (na.replace(/ /g, '') === nb.replace(/ /g, '')) return 0.98;
+
+  const whole = stringSimilarity_(na, nb);
+
+  const ta = na.split(' ').filter(String);
+  const tb = nb.split(' ').filter(String);
+  const shortT = ta.length <= tb.length ? ta : tb;
+  const longT = ta.length <= tb.length ? tb : ta;
+  let allMatched = true;
+  shortT.forEach(function (t) {
+    let best = 0;
+    longT.forEach(function (u) {
+      const s = t === u ? 1 : (Math.min(t.length, u.length) >= 4 ? stringSimilarity_(t, u) : 0);
+      if (s > best) best = s;
+    });
+    if (best < 0.8) allMatched = false;
+  });
+  const shortLen = shortT.join('').length;
+  const longLen = longT.join('').length;
+  const tokenScore = allMatched && shortLen >= 2 ? 0.86 + 0.09 * (shortLen / longLen) : 0;
+
+  return Math.max(whole, tokenScore);
+}
+
+/**
+ * Best match for `name` among `candidates` (array of strings).
+ * @return {{name: string, score: number}|null}
+ */
+function findBestSupplierMatch_(name, candidates, threshold) {
+  let best = null;
+  candidates.forEach(function (c) {
+    const score = supplierNameScore_(name, c);
+    if (!best || score > best.score) best = { name: c, score: score };
+  });
+  return best && best.score >= (threshold || 0.82) ? best : null;
 }

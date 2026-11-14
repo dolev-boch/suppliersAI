@@ -69,6 +69,7 @@ const PRIORITY_SUPPLIERS = [
   'מר קייק',
   'מרכז הירק',
   'משתלות',
+  'עמרוסי ניסים ויורם',
   'נטפים',
   'פוליבה',
   'פיין וויין גבינות',
@@ -180,10 +181,30 @@ function checkDuplicateInvoice(sheet, invoiceNumber, useSpecialColumns) {
 /**
  * Get sheet information based on supplier category
  */
+// Sheets that are never a single supplier's own sheet
+const NON_SUPPLIER_SHEETS = ['תחנת דלק', 'רשתות מזון', 'משתלות', 'שונות', 'סה"כ הוצאות', 'סה״כ הוצאות'];
+
 function getSheetInfo(data) {
   const ss = SpreadsheetApp.openById('1De973PQAzwTiSvTjBSSLEeoe3O-eMbvzy0py-DJegkM');
   let sheetName;
   let useSpecialColumns = false;
+
+  // ⭐ First: if the supplier name is (with high probability) an existing supplier
+  // sheet — even with a typo, or when the app classified it as "other" — use it.
+  // Category sheets (fuel / supermarket / nursery) keep their own routing.
+  if (data.supplier_name && ['priority', 'other', '', undefined, null].indexOf(data.supplier_category) !== -1) {
+    const candidates = ss.getSheets()
+      .map(function (s) { return s.getName(); })
+      .filter(function (n) { return NON_SUPPLIER_SHEETS.indexOf(n) === -1; });
+    const match = findBestSupplierMatch_(data.supplier_name, candidates, 0.82);
+    if (match) {
+      Logger.log('🔗 Supplier "' + data.supplier_name + '" → existing sheet "' + match.name +
+                 '" (score ' + match.score.toFixed(2) + ')');
+      data.supplier_category = 'priority';
+      data.supplier_name = match.name;
+      return { sheet: ss.getSheetByName(match.name), useSpecialColumns: false };
+    }
+  }
 
   // Determine which sheet to use
   if (data.supplier_category === 'priority') {
@@ -220,6 +241,13 @@ function getSheetInfo(data) {
         break;
       }
     }
+  }
+
+  // Known supplier without its own sheet yet → don't lose the invoice, put it in שונות
+  if (!sheet && data.supplier_category === 'priority') {
+    Logger.log('⚠️ No sheet for supplier "' + sheetName + '" — routing to שונות');
+    sheet = ss.getSheetByName(SHEET_NAMES.other);
+    useSpecialColumns = true;
   }
 
   // If still no sheet found, log error
@@ -716,4 +744,89 @@ function listAllSheets() {
   sheets.forEach((sheet, index) => {
     Logger.log(index + 1 + '. ' + sheet.getName());
   });
+}
+
+// ============================================================================
+// SUPPLIER NAME MATCHING (shared logic — same copy in main-invoice-script.gs,
+// drive-upload.gs and products-tracking2.gs; keep them in sync)
+// ============================================================================
+
+/** Normalize a supplier name: no בע"מ/ltd, no punctuation, no final-letter differences */
+function normalizeSupplierName_(text) {
+  if (!text) return '';
+  return String(text)
+    .toLowerCase()
+    .replace(/בע["״׳'\s]*מ/g, ' ')
+    .replace(/\b(ltd|inc|co)\b\.?/g, ' ')
+    .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
+    .replace(/["'״׳`\(\)\[\]\.,\-_\/\:;!?]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function levenshtein_(a, b) {
+  const m = [];
+  for (let i = 0; i <= b.length; i++) m[i] = [i];
+  for (let j = 0; j <= a.length; j++) m[0][j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      m[i][j] = b.charAt(i - 1) === a.charAt(j - 1)
+        ? m[i - 1][j - 1]
+        : Math.min(m[i - 1][j - 1] + 1, m[i][j - 1] + 1, m[i - 1][j] + 1);
+    }
+  }
+  return m[b.length][a.length];
+}
+
+function stringSimilarity_(a, b) {
+  const longer = a.length >= b.length ? a : b;
+  const shorter = a.length >= b.length ? b : a;
+  if (longer.length === 0) return 1;
+  return (longer.length - levenshtein_(longer, shorter)) / longer.length;
+}
+
+/**
+ * 0..1 similarity between two supplier names. Tolerates typos, a missing/extra
+ * word ("עמרוסי ניסים" vs "עמרוסי ניסים ויורם") and different word order.
+ */
+function supplierNameScore_(a, b) {
+  const na = normalizeSupplierName_(a);
+  const nb = normalizeSupplierName_(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  if (na.replace(/ /g, '') === nb.replace(/ /g, '')) return 0.98;
+
+  const whole = stringSimilarity_(na, nb);
+
+  const ta = na.split(' ').filter(String);
+  const tb = nb.split(' ').filter(String);
+  const shortT = ta.length <= tb.length ? ta : tb;
+  const longT = ta.length <= tb.length ? tb : ta;
+  let allMatched = true;
+  shortT.forEach(function (t) {
+    let best = 0;
+    longT.forEach(function (u) {
+      const s = t === u ? 1 : (Math.min(t.length, u.length) >= 4 ? stringSimilarity_(t, u) : 0);
+      if (s > best) best = s;
+    });
+    if (best < 0.8) allMatched = false;
+  });
+  const shortLen = shortT.join('').length;
+  const longLen = longT.join('').length;
+  const tokenScore = allMatched && shortLen >= 2 ? 0.86 + 0.09 * (shortLen / longLen) : 0;
+
+  return Math.max(whole, tokenScore);
+}
+
+/**
+ * Best match for `name` among `candidates` (array of strings).
+ * @return {{name: string, score: number}|null}
+ */
+function findBestSupplierMatch_(name, candidates, threshold) {
+  let best = null;
+  candidates.forEach(function (c) {
+    const score = supplierNameScore_(name, c);
+    if (!best || score > best.score) best = { name: c, score: score };
+  });
+  return best && best.score >= (threshold || 0.82) ? best : null;
 }
