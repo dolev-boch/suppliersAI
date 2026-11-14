@@ -559,7 +559,7 @@ function normalizeProductName(name) {
   return String(name || '')
     .toLowerCase()
     .replace(/ך/g, 'כ').replace(/ם/g, 'מ').replace(/ן/g, 'נ').replace(/ף/g, 'פ').replace(/ץ/g, 'צ')
-    .replace(/["'״׳`]/g, '')
+    .replace(/["'`´״׳‘’‚‛“”„‟]/g, '')
     .replace(/[,()\[\]\-_\/\\+*:]/g, ' ')
     .replace(/(\D)\.|\.(\D)/g, '$1 $2')
     .replace(/(\d)([^\d\s%.])/g, '$1 $2')

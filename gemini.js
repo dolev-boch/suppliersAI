@@ -145,24 +145,19 @@ const GeminiService = {
 
         const imagePart = { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } };
 
-        // Main extraction + an independent second reading of the product names, in parallel.
-        // A name is trusted only when both readings agree (see verifyProductNames).
-        const [main, second] = await Promise.all([
+        // In parallel:
+        //  A) main extraction on the full photo
+        //  B) locate the product table → crop it from the photo (zoom) → two independent
+        //     readings of the product names on the crop
+        // Names are then decided by majority vote (resolveProductNames).
+        const [main, nameReads] = await Promise.all([
           this.callGemini([{ text: this.buildPrompt() }, imagePart], {
             timeoutMs: TIMEOUT_MS,
             highResImage: true,
             thinkingLevel: CONFIG.GENERATION_CONFIG?.extractionThinkingLevel || 'MEDIUM',
             schema: this.extractionSchema(),
           }),
-          this.callGemini([{ text: this.buildNamesPrompt() }, imagePart], {
-            timeoutMs: TIMEOUT_MS,
-            highResImage: true,
-            thinkingLevel: 'LOW',
-            schema: this.namesSchema(),
-          }).catch((err) => {
-            console.warn('⚠️ Second name reading failed:', err.message);
-            return null;
-          }),
+          this.zoomedNameReadings(base64Image, mimeType, imagePart, TIMEOUT_MS),
         ]);
         const { text, usage, finishReason } = main;
 
@@ -179,17 +174,8 @@ const GeminiService = {
         this.applyPrintedArithmetic(parsed);
         parsed.products = this.cleanProducts(parsed.products || []);
 
-        let secondNames = null;
-        if (second && second.text) {
-          try {
-            secondNames = (this.parseJson(second.text).products || [])
-              .map((p) => p && p.name)
-              .filter(Boolean);
-          } catch (_) {
-            secondNames = null;
-          }
-        }
-        this.verifyProductNames(parsed.products, secondNames);
+        if (onProgress) onProgress({ status: 'processing', message: 'מאמת שמות מוצרים...' });
+        await this.resolveProductNames(parsed.products, nameReads.readings, nameReads.part);
 
         const validated = this.validateResponse(parsed);
         validated.readability = this.assessReadability(validated);
@@ -225,7 +211,8 @@ const GeminiService = {
     return String(name || '')
       .toLowerCase()
       .trim()
-      .replace(/[״׳'"`]/g, '')
+      // every apostrophe / quote / geresh / gershayim variant (ק"ג = ק'ג = ק״ג = ק’ג)
+      .replace(/["'`´״׳‘’‚‛“”„‟]/g, '')
       .replace(/[.,]/g, '')
       .replace(/\s+/g, ' ');
   },
@@ -469,35 +456,245 @@ const GeminiService = {
       .replace(/\s+/g, '');
   },
 
+  // ==========================================================================
+  // PRODUCT-NAME RELIABILITY: zoom → 3 independent readings → majority vote →
+  // image-grounded tie-break between the readings (never a new, invented name)
+  // ==========================================================================
+
   /**
-   * Mark each product name as verified when:
-   *  - the model's own name_confidence is ≥ 90, AND
-   *  - an independent second reading contains the same name (≥ 90% similar).
-   * Sets p.name_verified, p.name_agreement, p.name_second_reading.
+   * Locate the product table, crop it out of the photo (full width, the table's rows
+   * plus a margin) and read the names twice on the crop. The crop gives the model
+   * far more pixels per letter than the whole photo, where the receipt may be small.
+   * Returns { readings: string[][], part } — part is the image used (crop or original).
+   * Never throws.
    */
-  verifyProductNames(products, secondNames) {
-    const MIN = CONFIG.READABILITY?.MIN_NAME_CERTAINTY ?? 90;
-    const keys = (secondNames || []).map((n) => ({ n, k: this.nameKey(n) }));
-    products.forEach((p) => {
-      const own = this.toNum(p.name_confidence) ?? this.toNum(p.confidence) ?? 0;
-      let agreement = null;
-      let alt = null;
-      if (secondNames) {
-        const k = this.nameKey(p.name);
-        agreement = 0;
-        keys.forEach((s) => {
-          const sim = k === s.k ? 1 : SupplierMatcher.calculateSimilarity(k, s.k);
-          if (sim > agreement) { agreement = sim; alt = s.n; }
-        });
-        agreement = Math.round(agreement * 100);
+  async zoomedNameReadings(base64Image, mimeType, imagePart, timeoutMs) {
+    let part = imagePart;
+    try {
+      if ((mimeType || '').startsWith('image/') && typeof document !== 'undefined') {
+        const box = await this.detectProductTable(imagePart);
+        if (box) {
+          const crop = await this.cropToRows(base64Image, mimeType, box);
+          if (crop) part = { inline_data: { mime_type: crop.mime, data: crop.base64 } };
+        }
       }
-      p.name_agreement = agreement;
-      p.name_second_reading = alt;
-      p.name_verified = own >= MIN && (agreement === null || agreement >= MIN);
-      if (!p.name_verified) {
-        console.warn(`⚠️ Uncertain name "${p.name}" (own ${own}%, second reading "${alt}" ${agreement}%)`);
+    } catch (err) {
+      console.warn('⚠️ Table zoom skipped:', err.message);
+    }
+
+    const read = () =>
+      this.callGemini([{ text: this.buildNamesPrompt() }, part], {
+        timeoutMs,
+        highResImage: true,
+        thinkingLevel: 'LOW',
+        schema: this.namesSchema(),
+      })
+        .then((r) => (this.parseJson(r.text).products || []).map((p) => p && p.name).filter(Boolean))
+        .catch((err) => {
+          console.warn('⚠️ Name reading failed:', err.message);
+          return null;
+        });
+
+    const readings = (await Promise.all([read(), read()])).filter(Array.isArray);
+    return { readings, part };
+  },
+
+  /**
+   * Bounding box of the product rows: [ymin, xmin, ymax, xmax] normalized 0-1000
+   * (Gemini's native box_2d convention). Returns null if not found.
+   */
+  async detectProductTable(imagePart) {
+    const { text } = await this.callGemini(
+      [
+        {
+          text:
+            'Detect the table of product lines on this invoice/receipt (the rows with product names, quantities and prices — without the header block and without the totals at the bottom). ' +
+            'Return its box_2d as [ymin, xmin, ymax, xmax] normalized to 0-1000.',
+        },
+        imagePart,
+      ],
+      {
+        timeoutMs: 30000,
+        thinkingLevel: 'LOW',
+        schema: {
+          type: 'object',
+          properties: {
+            found: { type: 'boolean' },
+            box_2d: { type: 'array', items: { type: 'integer', minimum: 0, maximum: 1000 }, minItems: 4, maxItems: 4 },
+          },
+          required: ['found', 'box_2d'],
+        },
+      }
+    );
+    const r = this.parseJson(text);
+    const b = r && r.found && Array.isArray(r.box_2d) ? r.box_2d.map(Number) : null;
+    if (!b || b.length !== 4 || b[2] - b[0] < 20) return null;
+    return b;
+  },
+
+  /**
+   * Crop the rows of the box (with margin) across the full image width — robust to a
+   * slightly wrong horizontal box — and scale it up so the long side is ~2400px.
+   */
+  cropToRows(base64Image, mimeType, box) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const W = img.naturalWidth;
+          const H = img.naturalHeight;
+          const [ymin, , ymax] = box;
+          const margin = (ymax - ymin) * 0.08 + 15;
+          const y0 = Math.max(0, Math.floor(((ymin - margin) / 1000) * H));
+          const y1 = Math.min(H, Math.ceil(((ymax + margin) / 1000) * H));
+          const cropH = y1 - y0;
+          if (cropH < 40) return resolve(null);
+          const scale = Math.min(3, 2400 / Math.max(W, cropH));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(W * scale);
+          canvas.height = Math.round(cropH * scale);
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, y0, W, cropH, 0, 0, canvas.width, canvas.height);
+          resolve({ base64: canvas.toDataURL('image/jpeg', 0.92).split(',')[1], mime: 'image/jpeg' });
+        } catch (err) {
+          console.warn('Crop failed:', err);
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
+    });
+  },
+
+  /**
+   * Decide each product's name from 3 independent readings (main + 2 zoomed):
+   *  - readings that are identical after normalization (quotes/gershayim, final
+   *    letters, spaces) vote together; a name with ≥ 2 votes is verified.
+   *  - no majority → one image-grounded call must choose which of the candidates
+   *    matches the print (or none). It can only pick an actually-read candidate.
+   *  - still undecided → name_verified = false (→ catalog match or rescan).
+   * If the zoomed readings are unavailable, falls back to the model's own certainty.
+   */
+  async resolveProductNames(products, readings, imagePart) {
+    const MIN = CONFIG.READABILITY?.MIN_NAME_CERTAINTY ?? 90;
+    const same = (a, b) => a === b || SupplierMatcher.calculateSimilarity(a, b) >= 0.95;
+
+    if (!readings || readings.length === 0) {
+      products.forEach((p) => {
+        p.name_candidates = [p.name];
+        p.name_verified = (this.toNum(p.name_confidence) ?? 0) >= MIN;
+      });
+      return;
+    }
+
+    const pending = [];
+    products.forEach((p) => {
+      const candidates = [p.name];
+      readings.forEach((list) => {
+        // The reading's line that corresponds to this product = most similar name
+        const k = this.nameKey(p.name);
+        let best = null;
+        let bestSim = 0;
+        list.forEach((n) => {
+          const s = SupplierMatcher.calculateSimilarity(k, this.nameKey(n));
+          if (s > bestSim) { bestSim = s; best = n; }
+        });
+        if (best && bestSim >= 0.5) candidates.push(best);
+      });
+
+      // Group identical readings
+      const groups = [];
+      candidates.forEach((c) => {
+        const key = this.nameKey(c);
+        const g = groups.find((x) => same(x.key, key));
+        if (g) g.members.push(c);
+        else groups.push({ key, members: [c] });
+      });
+      groups.sort((a, b) => b.members.length - a.members.length);
+
+      p.name_candidates = groups.map((g) => g.members[0]);
+      p.name_votes = groups.map((g) => g.members.length);
+
+      if (groups[0].members.length >= 2) {
+        // Keep the main reading's spelling if it is in the winning group
+        const winner = groups[0].members.includes(p.name) ? p.name : groups[0].members[0];
+        if (winner !== p.name) console.log(`🗳️ Name by majority: "${p.name}" → "${winner}"`);
+        p.name = winner;
+        p.name_verified = true;
+      } else {
+        p.name_verified = false;
+        pending.push(p);
       }
     });
+
+    if (pending.length > 0) await this.adjudicateNames(pending, imagePart);
+
+    products.forEach((p) => {
+      p.name_second_reading = (p.name_candidates || []).find((c) => c !== p.name) || null;
+      if (!p.name_verified) console.warn(`⚠️ Uncertain name: ${JSON.stringify(p.name_candidates)}`);
+    });
+  },
+
+  /**
+   * Tie-break: show the (zoomed) image and the candidate readings; the model must pick
+   * the candidate that matches the printed text exactly, judged by the letters in the
+   * image — or null. Constrained to the candidates, so nothing new can be invented.
+   */
+  async adjudicateNames(pending, imagePart) {
+    const MIN = CONFIG.READABILITY?.MIN_NAME_CERTAINTY ?? 90;
+    try {
+      const lines = pending
+        .map((p, i) => `${i}: ${p.name_candidates.map((c, j) => `[${j}] ${c}`).join('   ')}`)
+        .join('\n');
+      const { text } = await this.callGemini(
+        [
+          {
+            text: `לכל שורה למטה יש כמה קריאות של אותו שם מוצר מהתמונה. הסתכל בתמונה על השם המודפס ובחר את הקריאה שתואמת **בדיוק, אות אחר אות**, למה שמודפס.
+בחר לפי האותיות שבתמונה בלבד (שים לב לאותיות דומות בצורתן), לא לפי איזו מילה נשמעת הגיונית.
+אם אף קריאה לא תואמת בדיוק — choice: null.
+
+${lines}`,
+          },
+          imagePart,
+        ],
+        {
+          timeoutMs: 45000,
+          highResImage: true,
+          thinkingLevel: 'MEDIUM',
+          schema: {
+            type: 'object',
+            properties: {
+              picks: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    line: { type: 'integer' },
+                    choice: { type: ['integer', 'null'] },
+                    confidence: { type: 'integer', minimum: 0, maximum: 100 },
+                  },
+                  required: ['line', 'choice', 'confidence'],
+                },
+              },
+            },
+            required: ['picks'],
+          },
+        }
+      );
+      (this.parseJson(text).picks || []).forEach((pick) => {
+        const p = pending[pick.line];
+        if (!p || !Number.isInteger(pick.choice)) return;
+        const chosen = p.name_candidates[pick.choice];
+        if (chosen && pick.confidence >= MIN) {
+          console.log(`⚖️ Name decided from image: ${JSON.stringify(p.name_candidates)} → "${chosen}" (${pick.confidence}%)`);
+          p.name = chosen;
+          p.name_verified = true;
+        }
+      });
+    } catch (err) {
+      console.warn('⚠️ Name tie-break failed:', err.message);
+    }
   },
 
   /**
